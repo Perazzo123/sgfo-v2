@@ -20,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR" className={`${geistSans.variable} h-full`}>
-      <body className="h-full flex antialiased" style={{ background: "#151a27" }}>
+      <body className="h-full flex antialiased" style={{ background: "#020810" }}>
         <Sidebar />
         <main className="flex-1 min-w-0 overflow-y-auto">
           {children}

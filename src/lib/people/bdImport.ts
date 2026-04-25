@@ -17,6 +17,17 @@ const REQUIRED: { key: BdKey; display: string; norms: string[] }[] = [
 ];
 
 const OPTIONAL: { key: BdKey; display: string; norms: string[] }[] = [
+  {
+    key: "zigCost",
+    display: "Custo Zig",
+    norms: [
+      "custo zig atual",
+      "custo zig",
+      "custo total zig",
+      "custo total (zig)",
+    ],
+  },
+  { key: "manager", display: "Gestor", norms: ["gestor", "gerente", "lider imediato", "líder imediato"] },
   { key: "behavior", display: "Nota Comportamento", norms: ["nota comportamento"] },
   { key: "delivery", display: "Nota Entrega", norms: ["nota entrega"] },
   { key: "classification", display: "Classificação", norms: ["classificacao", "classificação"] },
@@ -31,6 +42,8 @@ type BdKey =
   | "region"
   | "salary"
   | "freelance"
+  | "zigCost"
+  | "manager"
   | "behavior"
   | "delivery"
   | "classification"
@@ -40,6 +53,15 @@ type BdKey =
 
 type FieldToOriginal = Partial<Record<BdKey, string>>;
 
+/**
+ * Fallbacks "fuzzy" usados se a comparação exata por `norms` não casar.
+ * Importante para variações comuns do cabeçalho (ex.: "Custo Zig (R$)",
+ * "Custo Zig - Atual", "Custo Zig Atual 2025"). Avaliados após o passe exato.
+ */
+const FUZZY_MATCHERS: Partial<Record<BdKey, (normalizedHeader: string) => boolean>> = {
+  zigCost: (h) => h.includes("zig"),
+};
+
 export type BdRowOutcome = {
   excelRowIndex: number;
   errors: string[];
@@ -48,7 +70,9 @@ export type BdRowOutcome = {
     colaborador: string;
     cargo: string;
     filial: string;
+    gestor: string;
     salarioBase: string;
+    custoZig: string;
     mediaFreelancer: string;
     notaComportamento: string;
     notaEntrega: string;
@@ -66,12 +90,19 @@ export type BdImportStats = {
   mediaFreelancerMedia: number;
 };
 
+export type BdMappedColumn = {
+  display: string;
+  excelHeader: string | null;
+};
+
 export type BdImportResult = {
   kind: "ok" | "no_sheet" | "missing_headers";
   message: string;
   missingColumns: string[];
   sheetName: string;
   headerLabels: string[];
+  mapped: BdMappedColumn[];
+  unmappedHeaders: string[];
   rowOutcomes: BdRowOutcome[];
   people: Person[];
   canConfirm: boolean;
@@ -85,6 +116,8 @@ const empty = (): BdImportResult => ({
   missingColumns: [],
   sheetName: "",
   headerLabels: [],
+  mapped: [],
+  unmappedHeaders: [],
   rowOutcomes: [],
   people: [],
   canConfirm: false,
@@ -111,6 +144,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
       missingColumns: [],
       sheetName: "",
       headerLabels: [],
+      mapped: [],
+      unmappedHeaders: [],
       rowOutcomes: [],
       people: [],
       canConfirm: false,
@@ -126,6 +161,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
       missingColumns: [],
       sheetName: sheetRealName,
       headerLabels: [],
+      mapped: [],
+      unmappedHeaders: [],
       rowOutcomes: [],
       people: [],
       canConfirm: false,
@@ -141,6 +178,18 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
   const headerLabels = firstRow.map((c) => String(c ?? "").trim());
 
   const fieldToOriginal = buildFieldToOriginal(firstRow);
+  const allSpecs = [...REQUIRED, ...OPTIONAL];
+  const mapped: BdMappedColumn[] = allSpecs.map((s) => ({
+    display: s.display,
+    excelHeader: fieldToOriginal[s.key] ?? null,
+  }));
+  const usedHeaders = new Set(
+    Object.values(fieldToOriginal).filter((v): v is string => Boolean(v))
+  );
+  const unmappedHeaders = headerLabels.filter(
+    (h) => h && !usedHeaders.has(h)
+  );
+
   const missing: string[] = [];
   for (const r of REQUIRED) {
     if (!fieldToOriginal[r.key]) {
@@ -155,6 +204,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
       missingColumns: missing,
       sheetName: sheetRealName,
       headerLabels,
+      mapped,
+      unmappedHeaders,
       rowOutcomes: [],
       people: [],
       canConfirm: false,
@@ -211,6 +262,15 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
     if (mfl === null) {
       errors.push("Média Freelancer: use um valor numérico (ex.: 2000, 2.000,00).");
     }
+    let custoZig: number = sal as number;
+    if (p.custoZig.replace(/\s/g, "").length > 0) {
+      const z = parseMoneyBRL(p.custoZig) ?? parseNumberExcel(p.custoZig);
+      if (z === null) {
+        errors.push("Custo Zig: use um valor numérico (ex.: 5000, 5.000,00).");
+      } else {
+        custoZig = Math.max(0, z);
+      }
+    }
     if (!p.cargo.trim()) errors.push("Cargo: obrigatório na aba.");
     if (!p.filial.trim()) errors.push("Filial: obrigatório na aba.");
 
@@ -219,7 +279,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
       person = buildPersonFromBd(
         p,
         sal as number,
-        mfl as number
+        mfl as number,
+        custoZig
       );
     }
 
@@ -252,6 +313,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
       missingColumns: [],
       sheetName: sheetRealName,
       headerLabels,
+      mapped,
+      unmappedHeaders,
       rowOutcomes,
       people: [],
       canConfirm: false,
@@ -267,6 +330,8 @@ export function parseBdWorkbook(data: ArrayBuffer): BdImportResult {
     missingColumns: [],
     sheetName: sheetRealName,
     headerLabels,
+    mapped,
+    unmappedHeaders,
     rowOutcomes,
     people: withPerson,
     canConfirm: true,
@@ -290,6 +355,17 @@ function buildFieldToOriginal(headerRow: unknown[]): FieldToOriginal {
       }
     }
   }
+  for (const hRaw of headerRow) {
+    const h = String(hRaw ?? "").trim();
+    if (!h) continue;
+    const hn = normalizeHeader(h);
+    for (const [k, fn] of Object.entries(FUZZY_MATCHERS) as [BdKey, (h: string) => boolean][]) {
+      if (map[k]) continue;
+      if (fn(hn)) {
+        map[k] = h;
+      }
+    }
+  }
   return map;
 }
 
@@ -303,7 +379,9 @@ function readPreview(obj: Record<string, unknown>, f: FieldToOriginal): {
   colaborador: string;
   cargo: string;
   filial: string;
+  gestor: string;
   salarioBase: string;
+  custoZig: string;
   mediaFreelancer: string;
   notaComportamento: string;
   notaEntrega: string;
@@ -316,7 +394,9 @@ function readPreview(obj: Record<string, unknown>, f: FieldToOriginal): {
     colaborador: getCell(obj, f.name),
     cargo: getCell(obj, f.role),
     filial: getCell(obj, f.region),
+    gestor: getCell(obj, f.manager),
     salarioBase: getCell(obj, f.salary),
+    custoZig: getCell(obj, f.zigCost),
     mediaFreelancer: getCell(obj, f.freelance),
     notaComportamento: getCell(obj, f.behavior),
     notaEntrega: getCell(obj, f.delivery),
@@ -363,7 +443,8 @@ function parseOptionalScore(s: string): number | null {
 function buildPersonFromBd(
   p: ReturnType<typeof readPreview>,
   currentSalary: number,
-  freelance: number
+  freelance: number,
+  zigTotalCost: number
 ): Person {
   const name = p.colaborador.replace(/\s+/g, " ").trim();
   const filial = p.filial.trim();
@@ -376,10 +457,9 @@ function buildPersonFromBd(
     role: p.cargo.trim() || "—",
     squad: filial,
     region: filial,
-    managerName: "",
+    managerName: p.gestor.replace(/\s+/g, " ").trim(),
     currentSalary,
-    /** Temporário: alinhado ao salário base até cálculo Zig. */
-    zigTotalCost: currentSalary,
+    zigTotalCost,
     marketBenchmark: currentSalary,
     proposedSalary: currentSalary,
     freelanceAverage2025: Math.max(0, freelance),

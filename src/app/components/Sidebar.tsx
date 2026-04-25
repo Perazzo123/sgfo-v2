@@ -3,6 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
+const ROUTE_ACCENT: Record<string, string> = {
+  '/':        '#ffb700',
+  '/costs':   '#06d6f5',
+  '/people':  '#00ff88',
+  '/backlog': '#a855f7',
+}
+
 const navGroups = [
   {
     label: 'Principal',
@@ -70,22 +77,40 @@ export default function Sidebar() {
   return (
     <aside
       className="w-[220px] shrink-0 flex flex-col h-screen sticky top-0"
-      style={{ background: '#0d1117', borderRight: '1px solid #1a2235' }}
+      style={{
+        background: '#020810',
+        borderRight: '1px solid rgba(6,214,245,0.1)',
+        boxShadow: '2px 0 30px rgba(0,0,0,0.7)',
+      }}
     >
       {/* Logo */}
-      <div className="h-[60px] flex items-center px-5" style={{ borderBottom: '1px solid #1a2235' }}>
+      <div className="h-[60px] flex items-center px-5" style={{ borderBottom: '1px solid rgba(6,214,245,0.08)' }}>
         <div className="flex items-center gap-3">
           <div
-            className="w-8 h-8 rounded-xl flex items-center justify-center text-white font-black text-[11px] tracking-tight shrink-0"
-            style={{ background: '#d97706' }}
+            className="w-8 h-8 rounded-xl flex items-center justify-center font-black text-[11px] tracking-tight shrink-0"
+            style={{
+              background: 'rgba(255,183,0,0.1)',
+              border: '1px solid rgba(255,183,0,0.3)',
+              color: '#ffb700',
+              boxShadow: '0 0 14px rgba(255,183,0,0.2)',
+            }}
           >
             SF
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="font-bold text-sm tracking-tight" style={{ color: '#e2e8f5' }}>SGFO</span>
             <span
-              className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-              style={{ background: '#211c0e', color: '#f59e0b' }}
+              className="font-bold text-sm tracking-tight"
+              style={{ color: '#c8e8ff', textShadow: '0 0 20px rgba(6,214,245,0.3)' }}
+            >
+              SGFO
+            </span>
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+              style={{
+                background: 'rgba(255,183,0,0.08)',
+                color: '#ffb700',
+                border: '1px solid rgba(255,183,0,0.2)',
+              }}
             >
               v2
             </span>
@@ -98,34 +123,48 @@ export default function Sidebar() {
         {navGroups.map((group) => (
           <div key={group.label}>
             <p
-              className="text-[10px] font-semibold uppercase tracking-widest px-3 mb-2"
-              style={{ color: '#3d5a82' }}
+              className="text-[9px] font-bold uppercase tracking-[0.2em] px-3 mb-2"
+              style={{ color: '#1a3050' }}
             >
               {group.label}
             </p>
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const active = pathname === item.href
+                const accent = ROUTE_ACCENT[item.href] ?? '#ffb700'
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-100 ${
-                      active ? '' : 'hover:bg-white/[0.03]'
-                    }`}
+                    className="relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150"
                     style={
                       active
-                        ? { background: 'rgba(245,158,11,0.08)', color: '#fbbf24' }
-                        : { color: '#5b7aaa' }
+                        ? {
+                            background: `${accent}0d`,
+                            color: accent,
+                            boxShadow: `inset 0 0 20px ${accent}06, 0 0 1px ${accent}30`,
+                          }
+                        : { color: '#2a5070' }
                     }
                   >
                     {active && (
                       <span
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-full"
-                        style={{ background: '#f59e0b' }}
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full"
+                        style={{
+                          background: accent,
+                          boxShadow: `0 0 10px ${accent}, 0 0 20px ${accent}88`,
+                        }}
                       />
                     )}
-                    <span style={active ? { color: '#f59e0b' } : {}}>{item.icon}</span>
+                    <span
+                      style={
+                        active
+                          ? { color: accent, filter: `drop-shadow(0 0 5px ${accent}99)` }
+                          : {}
+                      }
+                    >
+                      {item.icon}
+                    </span>
                     {item.label}
                   </Link>
                 )
@@ -136,17 +175,21 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-4 py-4" style={{ borderTop: '1px solid #1a2235' }}>
+      <div className="px-4 py-4" style={{ borderTop: '1px solid rgba(6,214,245,0.08)' }}>
         <div className="flex items-center gap-2.5">
           <div
             className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-            style={{ background: '#211c0e', color: '#f59e0b', border: '1px solid #3a2e0f' }}
+            style={{
+              background: 'rgba(255,183,0,0.08)',
+              color: '#ffb700',
+              border: '1px solid rgba(255,183,0,0.2)',
+            }}
           >
             OP
           </div>
           <div>
-            <p className="text-xs font-semibold" style={{ color: '#7a90b8' }}>Operador</p>
-            <p className="text-[10px]" style={{ color: '#3d5a82' }}>Gestão de Campo · 2026</p>
+            <p className="text-xs font-semibold" style={{ color: '#5a8ab0' }}>Operador</p>
+            <p className="text-[10px]" style={{ color: '#1a3050' }}>Gestão de Campo · 2026</p>
           </div>
         </div>
       </div>

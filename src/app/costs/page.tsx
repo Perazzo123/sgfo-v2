@@ -1,218 +1,1378 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BUDGET_CATEGORY_LABELS,
+  EMPTY_BUDGET,
+  EMPTY_PROJECTS_STORE,
+  makeProjectId,
+  type Budget,
+  type BudgetBreakdown,
+  type BudgetCategoryKey,
+  type CostEntry,
+  type Project,
+  type ProjectsStore,
+} from "@/lib/costs/types";
+import {
+  closeProject,
+  getActiveProject,
+  loadProjectsStore,
+  removeProject,
+  reopenProject,
+  saveProjectsStore,
+  setActiveProject,
+  upsertProject,
+} from "@/lib/costs/storage";
+import {
+  extractBudgetFromXlsx,
+  type BudgetXlsxExtraction,
+  type BudgetXlsxOption,
+} from "@/lib/costs/xlsxImport";
 
-type CostEntry = { id: number; category: string; description: string; amount: number; justification: string };
-
-const BUDGET = 30000;
 const CATEGORIES = ["Mão de Obra", "Transporte", "Hospedagem", "Alimentação", "Frete", "Outros"];
 
 const S = {
-  bg: "#151a27", surface: "#1d2436", surfaceHigh: "#222c40",
-  border: "#2a3550", borderSub: "#1e2a42",
-  text: "#e2e8f5", muted: "#7a90b8", dim: "#4a6fa5",
-  amber: "#f59e0b", amberLight: "#fbbf24", amberBg: "#211c0e", amberBorder: "#3a2e0f",
-  inputBg: "#12192a",
+  bg: "#020810",
+  surface: "rgba(4,12,26,0.97)",
+  surfaceHigh: "rgba(6,16,32,0.97)",
+  border: "#0d2040",
+  borderSub: "#081630",
+  text: "#c8e8ff",
+  muted: "#4a7a9a",
+  dim: "#2a5070",
+  accent: "#06d6f5",
+  accentBg: "rgba(6,214,245,0.05)",
+  accentBorder: "rgba(6,214,245,0.15)",
+  amber: "#ffb700",
+  amberLight: "#ffcc33",
+  amberBg: "rgba(255,183,0,0.06)",
+  amberBorder: "rgba(255,183,0,0.2)",
+  green: "#00ff88",
+  greenBg: "rgba(0,255,136,0.05)",
+  greenBorder: "rgba(0,255,136,0.2)",
+  red: "#ff4466",
+  redBg: "rgba(255,68,102,0.05)",
+  redBorder: "rgba(255,68,102,0.2)",
+  inputBg: "#050e1f",
 };
+
+function GlowSection({
+  accent = "#06d6f5",
+  className = "",
+  style = {},
+  children,
+}: {
+  accent?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+}) {
+  const br = 12;
+  const cs = 14;
+  return (
+    <div
+      className={`relative ${className}`}
+      style={{
+        background: "rgba(4,12,26,0.97)",
+        border: `1px solid ${accent}20`,
+        borderRadius: br,
+        boxShadow: `0 0 30px ${accent}0e, 0 4px 60px rgba(0,0,0,0.5)`,
+        ...style,
+      }}
+    >
+      {[
+        { top: 0, left: 0, borderTop: `2px solid ${accent}`, borderLeft: `2px solid ${accent}`, borderTopLeftRadius: br },
+        { top: 0, right: 0, borderTop: `2px solid ${accent}`, borderRight: `2px solid ${accent}`, borderTopRightRadius: br },
+        { bottom: 0, left: 0, borderBottom: `2px solid ${accent}`, borderLeft: `2px solid ${accent}`, borderBottomLeftRadius: br },
+        { bottom: 0, right: 0, borderBottom: `2px solid ${accent}`, borderRight: `2px solid ${accent}`, borderBottomRightRadius: br },
+      ].map((s, i) => (
+        <div key={i} style={{ position: "absolute", width: cs, height: cs, ...s }} />
+      ))}
+      {children}
+    </div>
+  );
+}
 
 const CAT_STYLE: Record<string, { bg: string; color: string; border: string }> = {
   "Mão de Obra": { bg: "#0d1829", color: "#60a5fa", border: "#1a2e4a" },
-  Transporte:    { bg: "#0d1a29", color: "#38bdf8", border: "#1a3045" },
-  Hospedagem:    { bg: "#170d29", color: "#a78bfa", border: "#2a1845" },
-  Alimentação:   { bg: "#211c0e", color: "#fbbf24", border: "#3a2e0f" },
-  Frete:         { bg: "#0d1f18", color: "#34d399", border: "#1a3a2a" },
-  Outros:        { bg: "#1d2436", color: "#6b7fa3", border: "#2a3550" },
+  Transporte: { bg: "#0d1a29", color: "#38bdf8", border: "#1a3045" },
+  Hospedagem: { bg: "#170d29", color: "#a78bfa", border: "#2a1845" },
+  Alimentação: { bg: "#211c0e", color: "#fbbf24", border: "#3a2e0f" },
+  Frete: { bg: "#0d1f18", color: "#34d399", border: "#1a3a2a" },
+  Outros: { bg: "#1d2436", color: "#6b7fa3", border: "#2a3550" },
 };
 
+function projectLabel(p: Project): string {
+  const name = p.budget.eventName || "(sem nome)";
+  return p.budget.contractId ? `${name} · ${p.budget.contractId}` : name;
+}
+
+function projectRealized(p: Project): number {
+  return p.entries.reduce((sum, e) => sum + e.amount, 0);
+}
+
+function genEntryId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export default function CostsPage() {
-  const [entries, setEntries] = useState<CostEntry[]>([
-    { id: 1, category: "Mão de Obra", description: "Freelancer setup", amount: 5000, justification: "Setup adicional aprovado para operação." },
-    { id: 2, category: "Transporte",  description: "Van equipe",        amount: 3000, justification: "Deslocamento operacional." },
-  ]);
+  const [store, setStore] = useState<ProjectsStore>(EMPTY_PROJECTS_STORE);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setStore(loadProjectsStore());
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    saveProjectsStore(store);
+  }, [store, ready]);
+
+  const activeProject = useMemo(() => getActiveProject(store), [store]);
+  const openProjects = useMemo(
+    () => store.projects.filter((p) => p.status === "open"),
+    [store.projects]
+  );
+  const closedProjects = useMemo(
+    () => store.projects.filter((p) => p.status === "closed"),
+    [store.projects]
+  );
+  const budget = activeProject?.budget ?? null;
+  const entries = activeProject?.entries ?? [];
+
+  // Estado do editor / criação de projeto.
+  // editingProjectId === undefined: editor fechado.
+  // editingProjectId === null: criando um novo projeto (vazio).
+  // editingProjectId === string: editando o projeto correspondente.
+  const [editingProjectId, setEditingProjectId] = useState<string | null | undefined>(undefined);
+
+  // Form de lançamento (sempre amarrado ao projeto ativo).
   const [category, setCategory] = useState("Mão de Obra");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [justification, setJustification] = useState("");
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
 
   const consumed = entries.reduce((s, e) => s + e.amount, 0);
-  const balance = BUDGET - consumed;
-  const pct = Math.min((consumed / BUDGET) * 100, 100);
+  const totalBudget = budget?.total ?? 0;
+  const balance = totalBudget - consumed;
+  const pct = totalBudget > 0 ? Math.min((consumed / totalBudget) * 100, 100) : 0;
   const isOver = balance < 0;
 
-  function addEntry() {
-    const n = Number(amount);
-    if (!description || !justification || !n) return;
-    setEntries([...entries, { id: Date.now(), category, description, amount: n, justification }]);
-    setDescription(""); setAmount(""); setJustification("");
+  const bolsao = useMemo(() => {
+    return closedProjects.reduce(
+      (acc, p) => {
+        const previsto = p.budget.total ?? 0;
+        const realizado = projectRealized(p);
+        const saldo = previsto - realizado;
+        if (saldo >= 0) acc.sobras += saldo;
+        else acc.estouros += Math.abs(saldo);
+        acc.liquido += saldo;
+        return acc;
+      },
+      { sobras: 0, estouros: 0, liquido: 0 }
+    );
+  }, [closedProjects]);
+
+  function clearEntryForm() {
+    setCategory("Mão de Obra");
+    setDescription("");
+    setAmount("");
+    setJustification("");
+    setEditingEntryId(null);
   }
 
-  function removeEntry(id: number) {
-    setEntries(entries.filter((e) => e.id !== id));
+  function addEntry() {
+    if (!activeProject) {
+      alert("Selecione ou crie um projeto antes de adicionar um lançamento.");
+      return;
+    }
+    const n = Number(amount);
+    if (!description || !justification || !n) return;
+    setStore((s) => ({
+      ...s,
+      projects: s.projects.map((p) =>
+        p.id === activeProject.id
+          ? {
+              ...p,
+              entries: editingEntryId
+                ? p.entries.map((e) =>
+                    e.id === editingEntryId
+                      ? { ...e, category, description, amount: n, justification }
+                      : e
+                  )
+                : [
+                    ...p.entries,
+                    {
+                      id: genEntryId(),
+                      category,
+                      description,
+                      amount: n,
+                      justification,
+                      createdAt: new Date().toISOString(),
+                    } satisfies CostEntry,
+                  ],
+            }
+          : p
+      ),
+    }));
+    clearEntryForm();
   }
+
+  function editEntry(entry: CostEntry) {
+    setCategory(entry.category);
+    setDescription(entry.description);
+    setAmount(String(entry.amount));
+    setJustification(entry.justification);
+    setEditingEntryId(entry.id);
+  }
+
+  function selectProject(id: string) {
+    setStore((s) => setActiveProject(s, id));
+    setEditingProjectId(undefined);
+    clearEntryForm();
+  }
+
+  function openCreate() {
+    setEditingProjectId(null);
+  }
+
+  function openEditActive() {
+    if (!activeProject) {
+      openCreate();
+      return;
+    }
+    setEditingProjectId(activeProject.id);
+  }
+
+  function closeEditor() {
+    setEditingProjectId(undefined);
+  }
+
+  function handleSaveBudget(targetId: string | null, b: Budget) {
+    const finalBudget: Budget = { ...b, updatedAt: new Date().toISOString() };
+    let projectId: string;
+    if (targetId === null) {
+      projectId = makeProjectId({
+        contractId: finalBudget.contractId,
+        eventName: finalBudget.eventName,
+      });
+      // Garante unicidade: se já existir um projeto com esse id, sufixa.
+      const exists = store.projects.some((p) => p.id === projectId);
+      if (exists) {
+        let i = 2;
+        while (store.projects.some((p) => p.id === `${projectId}-${i}`)) i++;
+        projectId = `${projectId}-${i}`;
+      }
+    } else {
+      projectId = targetId;
+    }
+    setStore((s) =>
+      upsertProject(s, {
+        id: projectId,
+        budget: finalBudget,
+      })
+    );
+    setEditingProjectId(undefined);
+  }
+
+  function handleDeleteActive() {
+    if (!activeProject) return;
+    const ok = confirm(
+      `Excluir o projeto "${activeProject.budget.eventName || activeProject.id}" e todos os seus lançamentos?`
+    );
+    if (!ok) return;
+    setStore((s) => removeProject(s, activeProject.id));
+    setEditingProjectId(undefined);
+  }
+
+  function handleCloseActiveBudget() {
+    if (!activeProject) return;
+    const ok = confirm(
+      `Encerrar o orçamento de "${activeProject.budget.eventName || activeProject.id}"? Ele sairá da visão ativa e irá para a tabela de encerrados.`
+    );
+    if (!ok) return;
+    setStore((s) => closeProject(s, activeProject.id));
+    setEditingProjectId(undefined);
+  }
+
+  function handleReopenProject(id: string) {
+    setStore((s) => reopenProject(s, id));
+    setEditingProjectId(id);
+  }
+
+  /**
+   * Importação XLSX feita aqui (no parent) para fazer upsert no store
+   * usando o contractId como chave. Mantém os lançamentos existentes.
+   */
+  async function handleImportedExtraction(ex: BudgetXlsxExtraction, optionId?: BudgetXlsxOption["id"]) {
+    const opt = optionId ? ex.options.find((o) => o.id === optionId) ?? null : null;
+    const total = opt ? opt.total : ex.total ?? 0;
+    const breakdown = opt ? opt.breakdown : ex.breakdown;
+    const newBudget: Budget = {
+      ...EMPTY_BUDGET,
+      eventName: ex.eventName ?? "",
+      contractId: ex.contractId ?? "",
+      startDate: ex.startDate ?? "",
+      endDate: ex.endDate ?? "",
+      location: ex.location ?? "",
+      total,
+      breakdown: { ...breakdown },
+      source: "xlsx",
+      fileName: ex.fileName,
+      sourceSheet: ex.sourceSheet ?? undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    const id = makeProjectId({
+      contractId: newBudget.contractId,
+      eventName: newBudget.eventName,
+    });
+    setStore((s) =>
+      upsertProject(s, { id, budget: newBudget, status: "open", closedAt: undefined })
+    );
+    // Foca no projeto recém-importado e abre o editor para permitir ajustes finos.
+    setEditingProjectId(id);
+  }
+
+  const editorOpen = editingProjectId !== undefined;
+  const editorBudget: Budget | null = editorOpen
+    ? editingProjectId === null
+      ? EMPTY_BUDGET
+      : (store.projects.find((p) => p.id === editingProjectId)?.budget ?? null)
+    : null;
 
   return (
     <div className="min-h-full" style={{ background: S.bg }}>
-
-      {/* Top bar */}
-      <div className="px-8 py-5 flex items-center justify-between" style={{ background: "#111827", borderBottom: "1px solid #1a2235" }}>
+      <div
+        className="px-8 py-5 flex items-center justify-between gap-4 flex-wrap"
+        style={{
+          background: "rgba(3,10,22,0.95)",
+          borderBottom: "1px solid rgba(6,214,245,0.1)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest mb-1" style={{ color: S.amber }}>SGFO · Módulo</p>
-          <h1 className="text-lg font-bold tracking-tight" style={{ color: S.text }}>Gestão de Custos</h1>
+          <p
+            className="text-[9px] font-bold uppercase tracking-[0.22em] mb-1"
+            style={{ color: "#ffb700", opacity: 0.75 }}
+          >
+            SGFO · Módulo
+          </p>
+          <h1
+            className="text-xl font-black tracking-tight"
+            style={{ color: "#c8e8ff", textShadow: "0 0 30px rgba(6,214,245,0.25)" }}
+          >
+            Gestão de Custos
+          </h1>
+          {activeProject ? (
+            <p className="text-xs mt-1" style={{ color: S.accent, opacity: 0.7 }}>
+              {activeProject.budget.eventName || "(sem nome)"}
+              {activeProject.budget.contractId ? ` · Contrato ${activeProject.budget.contractId}` : ""}
+              {activeProject.budget.startDate || activeProject.budget.endDate
+                ? ` · ${activeProject.budget.startDate || "?"} → ${activeProject.budget.endDate || "?"}`
+                : ""}
+            </p>
+          ) : (
+            <p className="text-xs mt-1" style={{ color: S.accent, opacity: 0.5 }}>
+              Nenhum projeto cadastrado. Crie um ou importe a planilha de orçamento.
+            </p>
+          )}
         </div>
-        <button
-          onClick={addEntry}
-          className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg"
-          style={{ background: S.amberBg, color: S.amberLight, border: `1px solid ${S.amberBorder}` }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          Novo lançamento
-        </button>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <ProjectSelector
+            projects={openProjects}
+            activeProjectId={activeProject?.id ?? null}
+            onChange={selectProject}
+            onCreate={openCreate}
+          />
+          {activeProject ? (
+            <>
+              <button
+                type="button"
+                onClick={openEditActive}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                style={{
+                  background: S.accentBg,
+                  color: S.accent,
+                  border: `1px solid ${S.accentBorder}`,
+                }}
+              >
+                {editorOpen && editingProjectId === activeProject.id
+                  ? "Fechar editor"
+                  : "Editar orçamento"}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseActiveBudget}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                style={{
+                  background: S.greenBg,
+                  color: S.green,
+                  border: `1px solid ${S.greenBorder}`,
+                }}
+              >
+                Encerrar orçamento
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteActive}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                style={{
+                  background: S.redBg,
+                  color: S.red,
+                  border: `1px solid ${S.redBorder}`,
+                }}
+              >
+                Excluir projeto
+              </button>
+            </>
+          ) : null}
+          <button
+            onClick={addEntry}
+            disabled={!activeProject}
+            className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg"
+            style={{
+              background: S.amberBg,
+              color: S.amber,
+              border: `1px solid ${S.amberBorder}`,
+              boxShadow: activeProject ? `0 0 14px rgba(255,183,0,0.15)` : "none",
+              opacity: activeProject ? 1 : 0.4,
+              cursor: activeProject ? "pointer" : "not-allowed",
+            }}
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            Novo lançamento
+          </button>
+        </div>
       </div>
 
       <div className="p-8 space-y-6">
+        {!ready ? null : store.projects.length === 0 && !editorOpen ? (
+          <EmptyState onCreate={openCreate} />
+        ) : null}
 
-        {/* KPI cards */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-xl p-5" style={{ background: "#0d1829", border: "1px solid #1a2e4a" }}>
-            <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: "#3b82f6" }}>Budget Total</p>
-            <p className="text-2xl font-bold tabular-nums" style={{ color: "#93c5fd" }}>R$ {BUDGET.toLocaleString("pt-BR")}</p>
-          </div>
-          <div className="rounded-xl p-5" style={{ background: S.amberBg, border: `1px solid ${S.amberBorder}` }}>
-            <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: S.amber }}>Consumido</p>
-            <p className="text-2xl font-bold tabular-nums" style={{ color: S.amberLight }}>R$ {consumed.toLocaleString("pt-BR")}</p>
-          </div>
-          <div className="rounded-xl p-5" style={{ background: isOver ? "#1f0d0d" : "#0d1f18", border: `1px solid ${isOver ? "#3a1a1a" : "#1a3a2a"}` }}>
-            <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: isOver ? "#f87171" : "#10b981" }}>Saldo Disponível</p>
-            <p className="text-2xl font-bold tabular-nums" style={{ color: isOver ? "#fca5a5" : "#34d399" }}>
-              R$ {Math.abs(balance).toLocaleString("pt-BR")}
+        {editorOpen && editorBudget ? (
+          <BudgetEditor
+            mode={editingProjectId === null ? "create" : "edit"}
+            value={editorBudget}
+            onSave={(b) => handleSaveBudget(editingProjectId ?? null, b)}
+            onCancel={closeEditor}
+            onImported={handleImportedExtraction}
+          />
+        ) : null}
+
+        {activeProject ? (
+          <>
+            <div className="grid grid-cols-3 gap-4">
+              <GlowSection accent={S.accent}>
+                <div className="p-5">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: S.accent, opacity: 0.65 }}>
+                    Previsto (Budget)
+                  </p>
+                  <p
+                    className="text-2xl font-black tabular-nums leading-none"
+                    style={{ color: S.accent, textShadow: `0 0 18px ${S.accent}99, 0 0 48px ${S.accent}44` }}
+                  >
+                    {totalBudget > 0 ? `R$ ${totalBudget.toLocaleString("pt-BR")}` : "—"}
+                  </p>
+                  <p className="text-[10px] mt-2" style={{ color: S.accent, opacity: 0.5 }}>
+                    {budget
+                      ? budget.source === "xlsx"
+                        ? `Importado · ${budget.fileName ?? "Excel"}${budget.sourceSheet ? ` · aba ${budget.sourceSheet}` : ""}`
+                        : "Definido manualmente"
+                      : "Defina o orçamento para liberar os indicadores"}
+                  </p>
+                </div>
+              </GlowSection>
+              <GlowSection accent={S.amber}>
+                <div className="p-5">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: S.amber, opacity: 0.65 }}>
+                    Realizado
+                  </p>
+                  <p
+                    className="text-2xl font-black tabular-nums leading-none"
+                    style={{ color: S.amber, textShadow: `0 0 18px ${S.amber}99, 0 0 48px ${S.amber}44` }}
+                  >
+                    R$ {consumed.toLocaleString("pt-BR")}
+                  </p>
+                  <p className="text-[10px] mt-2" style={{ color: S.amber, opacity: 0.5 }}>
+                    {entries.length} {entries.length === 1 ? "lançamento" : "lançamentos"}
+                  </p>
+                </div>
+              </GlowSection>
+              <GlowSection accent={isOver ? S.red : S.green}>
+                <div className="p-5">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: isOver ? S.red : S.green, opacity: 0.65 }}>
+                    Saldo Disponível
+                  </p>
+                  <p
+                    className="text-2xl font-black tabular-nums leading-none"
+                    style={{
+                      color: isOver ? S.red : S.green,
+                      textShadow: `0 0 18px ${isOver ? S.red : S.green}99, 0 0 48px ${isOver ? S.red : S.green}44`,
+                    }}
+                  >
+                    {totalBudget > 0
+                      ? `${isOver ? "− " : ""}R$ ${Math.abs(balance).toLocaleString("pt-BR")}`
+                      : "—"}
+                  </p>
+                </div>
+              </GlowSection>
+            </div>
+
+            <GlowSection accent={S.accent}>
+              <div className="px-6 py-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-0.5" style={{ color: S.accent, opacity: 0.55 }}>
+                      Execução do Budget (realizado / previsto)
+                    </p>
+                    <p className="text-sm" style={{ color: S.muted }}>
+                      R$ {consumed.toLocaleString("pt-BR")} de{" "}
+                      {totalBudget > 0
+                        ? `R$ ${totalBudget.toLocaleString("pt-BR")}`
+                        : "— sem orçamento —"}
+                    </p>
+                  </div>
+                  <span
+                    className="text-sm font-black px-3 py-1 rounded-full tabular-nums"
+                    style={{
+                      background: pct > 85 ? S.redBg : S.amberBg,
+                      color: pct > 85 ? S.red : S.amber,
+                      border: `1px solid ${pct > 85 ? S.redBorder : S.amberBorder}`,
+                      textShadow: `0 0 10px ${pct > 85 ? S.red : S.amber}88`,
+                    }}
+                  >
+                    {totalBudget > 0 ? `${pct.toFixed(1)}%` : "—"}
+                  </span>
+                </div>
+                <div className="h-[5px] rounded-full overflow-hidden" style={{ background: "#050e1f" }}>
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${pct}%`,
+                      background: pct > 85
+                        ? `linear-gradient(90deg, #ff4466, #ff6680)`
+                        : `linear-gradient(90deg, ${S.amber}, ${S.amberLight})`,
+                      boxShadow: pct > 0 ? `0 0 8px ${pct > 85 ? S.red : S.amber}88` : "none",
+                    }}
+                  />
+                </div>
+              </div>
+            </GlowSection>
+
+            {budget && Object.keys(budget.breakdown).length > 0 ? (
+              <BreakdownPanel breakdown={budget.breakdown} totalBudget={totalBudget} />
+            ) : null}
+
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+              <GlowSection accent={S.amber} className="lg:col-span-2">
+                <div className="p-6">
+                <div
+                  className="flex items-center gap-2 mb-5 pb-4"
+                  style={{ borderBottom: `1px solid rgba(255,183,0,0.1)` }}
+                >
+                  <span className="block w-[2px] h-4 rounded-full" style={{ background: S.amber, boxShadow: `0 0 8px ${S.amber}` }} />
+                  <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: S.amber, textShadow: `0 0 12px ${S.amber}55` }}>
+                    Novo lançamento
+                  </h2>
+                </div>
+                <div className="space-y-4">
+                  {(["Categoria", "Valor (R$)", "Descrição", "Justificativa"] as const).map((lbl) => (
+                    <div key={lbl}>
+                      <label
+                        className="block text-[10px] font-semibold uppercase tracking-widest mb-1.5"
+                        style={{ color: S.muted }}
+                      >
+                        {lbl}
+                      </label>
+                      {lbl === "Categoria" ? (
+                        <select
+                          value={category}
+                          onChange={(e) => setCategory(e.target.value)}
+                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+                          style={{
+                            background: S.inputBg,
+                            border: `1px solid ${S.border}`,
+                            color: S.text,
+                          }}
+                        >
+                          {CATEGORIES.map((c) => (
+                            <option key={c}>{c}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={
+                            lbl === "Valor (R$)"
+                              ? amount
+                              : lbl === "Descrição"
+                                ? description
+                                : justification
+                          }
+                          onChange={(e) =>
+                            lbl === "Valor (R$)"
+                              ? setAmount(e.target.value)
+                              : lbl === "Descrição"
+                                ? setDescription(e.target.value)
+                                : setJustification(e.target.value)
+                          }
+                          type={lbl === "Valor (R$)" ? "number" : "text"}
+                          placeholder={
+                            lbl === "Valor (R$)"
+                              ? "0"
+                              : `Ex: ${
+                                  lbl === "Descrição" ? "Freelancer de setup" : "Aprovado pela operação"
+                                }`
+                          }
+                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+                          style={{
+                            background: S.inputBg,
+                            border: `1px solid ${S.border}`,
+                            color: S.text,
+                          }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={addEntry}
+                  className="mt-5 w-full rounded-lg py-2.5 text-sm font-semibold"
+                  style={{
+                    background: S.amberBg,
+                    color: S.amber,
+                    border: `1px solid ${S.amberBorder}`,
+                    boxShadow: `0 0 14px rgba(255,183,0,0.15)`,
+                  }}
+                >
+                  {editingEntryId ? "Salvar alteração" : "Adicionar custo"}
+                </button>
+                </div>
+              </GlowSection>
+
+              <GlowSection accent={S.accent} className="lg:col-span-3 overflow-hidden">
+                <div
+                  className="flex items-center justify-between px-6 py-4"
+                  style={{ borderBottom: `1px solid rgba(6,214,245,0.1)` }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="block w-[2px] h-4 rounded-full" style={{ background: S.accent, boxShadow: `0 0 8px ${S.accent}` }} />
+                    <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: S.accent, textShadow: `0 0 12px ${S.accent}55` }}>
+                      Lançamentos
+                    </h2>
+                  </div>
+                  <span
+                    className="text-xs font-bold px-2.5 py-1 rounded-full"
+                    style={{
+                      background: S.amberBg,
+                      color: S.amber,
+                      border: `1px solid ${S.amberBorder}`,
+                    }}
+                  >
+                    {entries.length} {entries.length === 1 ? "item" : "itens"}
+                  </span>
+                </div>
+
+                {entries.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center px-6">
+                    <p className="text-sm" style={{ color: S.muted }}>
+                      Nenhum lançamento registrado neste projeto.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className="hidden sm:grid sm:grid-cols-[150px_1fr_1fr_120px_36px] gap-4 px-6 py-3"
+                      style={{ background: "rgba(3,10,22,0.8)", borderBottom: `1px solid ${S.borderSub}` }}
+                    >
+                      {["Categoria", "Descrição", "Justificativa", "Valor", ""].map((h) => (
+                        <span
+                          key={h}
+                          className="text-[10px] font-bold uppercase tracking-widest"
+                          style={{ color: S.dim }}
+                        >
+                          {h}
+                        </span>
+                      ))}
+                    </div>
+                    {entries.map((entry, i) => {
+                      const cs = CAT_STYLE[entry.category] ?? CAT_STYLE["Outros"];
+                      return (
+                        <div
+                          key={entry.id}
+                          className="grid grid-cols-1 sm:grid-cols-[150px_1fr_1fr_120px_36px] gap-3 sm:gap-4 items-center px-6 py-4"
+                          style={{
+                            borderBottom:
+                              i < entries.length - 1 ? `1px solid ${S.borderSub}` : "none",
+                          }}
+                        >
+                          <span
+                            className="text-[11px] font-semibold px-2 py-1 rounded-md inline-block w-fit"
+                            style={{
+                              background: cs.bg,
+                              color: cs.color,
+                              border: `1px solid ${cs.border}`,
+                            }}
+                          >
+                            {entry.category}
+                          </span>
+                          <p className="text-sm truncate" style={{ color: S.text }}>
+                            {entry.description}
+                          </p>
+                          <p className="text-sm truncate" style={{ color: S.muted }}>
+                            {entry.justification}
+                          </p>
+                          <p
+                            className="text-sm font-semibold tabular-nums"
+                            style={{ color: S.amber, textShadow: `0 0 8px ${S.amber}66` }}
+                          >
+                            R$ {entry.amount.toLocaleString("pt-BR")}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => editEntry(entry)}
+                            className="w-8 h-8 rounded-md flex items-center justify-center transition-colors"
+                            style={{ color: S.accent }}
+                            title="Editar lançamento"
+                          >
+                            <svg
+                              width="13"
+                              height="13"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                            </svg>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </GlowSection>
+            </div>
+          </>
+        ) : null}
+
+        {closedProjects.length > 0 ? (
+          <>
+            <BolsaoPanel sobras={bolsao.sobras} estouros={bolsao.estouros} liquido={bolsao.liquido} />
+            <ClosedBudgetsTable projects={closedProjects} onReopen={handleReopenProject} />
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProjectSelector({
+  projects,
+  activeProjectId,
+  onChange,
+  onCreate,
+}: {
+  projects: Project[];
+  activeProjectId: string | null;
+  onChange: (id: string) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label
+        className="text-[10px] font-semibold uppercase tracking-widest"
+        style={{ color: S.muted }}
+      >
+        Projeto
+      </label>
+      <select
+        value={activeProjectId ?? ""}
+        onChange={(e) => {
+          if (e.target.value) onChange(e.target.value);
+        }}
+        disabled={projects.length === 0}
+        className="rounded-lg px-3 py-1.5 text-xs outline-none"
+        style={{
+          background: S.inputBg,
+          border: `1px solid ${S.border}`,
+          color: S.text,
+          minWidth: 220,
+          opacity: projects.length === 0 ? 0.6 : 1,
+        }}
+      >
+        {projects.length === 0 ? (
+          <option value="">Nenhum aberto</option>
+        ) : (
+          projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {projectLabel(p)}
+            </option>
+          ))
+        )}
+      </select>
+      <button
+        type="button"
+        onClick={onCreate}
+        className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+        style={{
+          background: S.greenBg,
+          color: S.green,
+          border: `1px solid ${S.greenBorder}`,
+        }}
+      >
+        + Novo projeto
+      </button>
+    </div>
+  );
+}
+
+function EmptyState({ onCreate }: { onCreate: () => void }) {
+  return (
+    <GlowSection accent={S.accent} className="p-10 text-center">
+      <div>
+        <p className="text-[9px] font-bold uppercase tracking-[0.22em] mb-2" style={{ color: S.amber, opacity: 0.7 }}>
+          Comece por aqui
+        </p>
+        <h2 className="text-base font-black mb-1" style={{ color: S.text }}>
+          Nenhum projeto cadastrado
+        </h2>
+        <p className="text-sm mb-5" style={{ color: S.muted }}>
+          Cada projeto tem o seu próprio orçamento (previsto) e os seus lançamentos (realizado).
+          Importe a planilha de orçamento em Excel ou crie um projeto manualmente para começar.
+        </p>
+        <button
+          type="button"
+          onClick={onCreate}
+          className="text-sm font-semibold px-5 py-2.5 rounded-lg"
+          style={{
+            background: S.amberBg,
+            color: S.amber,
+            border: `1px solid ${S.amberBorder}`,
+            boxShadow: `0 0 14px rgba(255,183,0,0.15)`,
+          }}
+        >
+          Criar / importar projeto
+        </button>
+      </div>
+    </GlowSection>
+  );
+}
+
+function BolsaoPanel({
+  sobras,
+  estouros,
+  liquido,
+}: {
+  sobras: number;
+  estouros: number;
+  liquido: number;
+}) {
+  const negativo = liquido < 0;
+  const accent = negativo ? S.red : S.green;
+  return (
+    <GlowSection accent={accent} className="p-6">
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: accent, textShadow: `0 0 12px ${accent}55` }}>
+              Bolsão consolidado (projetos encerrados)
+            </h2>
+            <p className="text-xs mt-0.5" style={{ color: S.muted }}>
+              Acumula sobras e estouros dos orçamentos encerrados.
             </p>
           </div>
+          <span
+            className="text-xs font-bold px-2.5 py-1 rounded-full"
+            style={{
+              background: negativo ? S.redBg : S.greenBg,
+              color: negativo ? S.red : S.green,
+              border: `1px solid ${negativo ? S.redBorder : S.greenBorder}`,
+            }}
+          >
+            {negativo ? "Saldo líquido negativo" : "Saldo líquido positivo"}
+          </span>
         </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <KpiCard label="Sobras acumuladas" value={`R$ ${sobras.toLocaleString("pt-BR")}`} tone="positive" />
+          <KpiCard label="Estouros acumulados" value={`R$ ${estouros.toLocaleString("pt-BR")}`} tone="danger" />
+          <KpiCard label="Bolsão líquido" value={`${liquido < 0 ? "− " : ""}R$ ${Math.abs(liquido).toLocaleString("pt-BR")}`} tone={negativo ? "danger" : "positive"} />
+        </div>
+      </div>
+    </GlowSection>
+  );
+}
 
-        {/* Progress */}
-        <div className="rounded-xl px-6 py-5" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-widest mb-0.5" style={{ color: S.muted }}>Execução do Budget</p>
-              <p className="text-sm" style={{ color: S.muted }}>R$ {consumed.toLocaleString("pt-BR")} de R$ {BUDGET.toLocaleString("pt-BR")}</p>
-            </div>
-            <span
-              className="text-sm font-bold px-3 py-1 rounded-full tabular-nums"
-              style={{ background: pct > 85 ? "#1f0d0d" : S.amberBg, color: pct > 85 ? "#f87171" : S.amberLight }}
-            >
-              {pct.toFixed(1)}%
-            </span>
+function KpiCard({ label, value, tone }: { label: string; value: string; tone: "positive" | "danger" }) {
+  const color = tone === "danger" ? S.red : S.green;
+  return (
+    <GlowSection accent={color} className="p-4">
+      <div>
+        <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-1.5" style={{ color, opacity: 0.65 }}>{label}</p>
+        <p className="text-xl font-black tabular-nums" style={{ color, textShadow: `0 0 14px ${color}88` }}>{value}</p>
+      </div>
+    </GlowSection>
+  );
+}
+
+function ClosedBudgetsTable({
+  projects,
+  onReopen,
+}: {
+  projects: Project[];
+  onReopen: (id: string) => void;
+}) {
+  return (
+    <GlowSection accent={S.accent} className="overflow-hidden">
+      <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: `1px solid rgba(6,214,245,0.1)` }}>
+        <div className="flex items-center gap-2">
+          <span className="block w-[2px] h-4 rounded-full" style={{ background: S.accent, boxShadow: `0 0 8px ${S.accent}` }} />
+          <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: S.accent, textShadow: `0 0 12px ${S.accent}55` }}>
+            Orçamentos encerrados
+          </h2>
+        </div>
+        <span className="text-xs font-bold" style={{ color: S.muted }}>
+          {projects.length} {projects.length === 1 ? "linha" : "linhas"}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ background: "rgba(3,10,22,0.8)", borderBottom: `1px solid ${S.borderSub}` }}>
+              {["Projeto", "Contrato", "Previsto", "Realizado", "Saldo", "Encerrado em", ""].map((h) => (
+                <th key={h} className="text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest" style={{ color: S.dim }}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {projects.map((p) => {
+              const previsto = p.budget.total ?? 0;
+              const realizado = projectRealized(p);
+              const saldo = previsto - realizado;
+              const isNeg = saldo < 0;
+              return (
+                <tr key={p.id} style={{ borderBottom: `1px solid ${S.borderSub}` }}>
+                  <td className="px-4 py-3" style={{ color: S.text }}>{p.budget.eventName || "(sem nome)"}</td>
+                  <td className="px-4 py-3 tabular-nums" style={{ color: S.muted }}>{p.budget.contractId || "—"}</td>
+                  <td className="px-4 py-3 tabular-nums" style={{ color: S.accent }}>R$ {previsto.toLocaleString("pt-BR")}</td>
+                  <td className="px-4 py-3 tabular-nums" style={{ color: S.amber }}>R$ {realizado.toLocaleString("pt-BR")}</td>
+                  <td className="px-4 py-3 tabular-nums font-semibold" style={{ color: isNeg ? S.red : S.green }}>
+                    {isNeg ? "− " : ""}R$ {Math.abs(saldo).toLocaleString("pt-BR")}
+                  </td>
+                  <td className="px-4 py-3" style={{ color: S.muted }}>
+                    {p.closedAt ? new Date(p.closedAt).toLocaleDateString("pt-BR") : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onReopen(p.id)}
+                      className="text-xs font-semibold px-2.5 py-1.5 rounded-lg"
+                      style={{ background: S.accentBg, color: S.accent, border: `1px solid ${S.accentBorder}` }}
+                    >
+                      Reabrir orçamento
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </GlowSection>
+  );
+}
+
+function BreakdownPanel({
+  breakdown,
+  totalBudget,
+}: {
+  breakdown: BudgetBreakdown;
+  totalBudget: number;
+}) {
+  const items = useMemo(
+    () =>
+      (Object.entries(breakdown) as [BudgetCategoryKey, number][]).filter(
+        ([, v]) => typeof v === "number" && v > 0
+      ),
+    [breakdown]
+  );
+  if (items.length === 0) return null;
+  return (
+    <GlowSection accent={S.accent} className="p-6">
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <span className="block w-[2px] h-4 rounded-full" style={{ background: S.accent, boxShadow: `0 0 8px ${S.accent}` }} />
+            <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: S.accent, textShadow: `0 0 12px ${S.accent}55` }}>
+              Quebra do orçamento por categoria
+            </h2>
           </div>
-          <div className="h-2 rounded-full overflow-hidden" style={{ background: "#111827" }}>
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${pct}%`, background: pct > 85 ? "linear-gradient(90deg, #f97316, #ef4444)" : "linear-gradient(90deg, #f59e0b, #fbbf24)" }}
+          <span className="text-[10px] font-bold" style={{ color: S.dim }}>previsto</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {items.map(([k, v]) => {
+            const lbl = BUDGET_CATEGORY_LABELS[k];
+            const cs = CAT_STYLE[lbl] ?? CAT_STYLE["Outros"];
+            const pct = totalBudget > 0 ? (v / totalBudget) * 100 : 0;
+            return (
+              <div key={k} className="rounded-lg p-3" style={{ background: cs.bg, border: `1px solid ${cs.border}` }}>
+                <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: cs.color, opacity: 0.7 }}>{lbl}</p>
+                <p className="text-sm font-black tabular-nums" style={{ color: cs.color, textShadow: `0 0 10px ${cs.color}66` }}>
+                  R$ {v.toLocaleString("pt-BR")}
+                </p>
+                <p className="text-[10px] mt-0.5" style={{ color: cs.color, opacity: 0.5 }}>
+                  {totalBudget > 0 ? `${pct.toFixed(1)}%` : "—"}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </GlowSection>
+  );
+}
+
+function BudgetEditor({
+  mode,
+  value,
+  onSave,
+  onCancel,
+  onImported,
+}: {
+  mode: "create" | "edit";
+  value: Budget;
+  onSave: (b: Budget) => void;
+  onCancel: () => void;
+  onImported: (ex: BudgetXlsxExtraction, optionId?: BudgetXlsxOption["id"]) => void | Promise<void>;
+}) {
+  const [draft, setDraft] = useState<Budget>(value);
+  const [busy, setBusy] = useState(false);
+  const [warn, setWarn] = useState<string[]>([]);
+  const [lastExtraction, setLastExtraction] = useState<BudgetXlsxExtraction | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function setField<K extends keyof Budget>(k: K, v: Budget[K]) {
+    setDraft((d) => ({ ...d, [k]: v }));
+  }
+  function setBreak(k: BudgetCategoryKey, v: number) {
+    setDraft((d) => ({ ...d, breakdown: { ...d.breakdown, [k]: v } }));
+  }
+
+  function applyExtractionToDraft(ex: BudgetXlsxExtraction, optionId?: BudgetXlsxOption["id"]) {
+    const opt = optionId ? ex.options.find((o) => o.id === optionId) ?? null : null;
+    const total = opt ? opt.total : ex.total ?? 0;
+    const breakdown = opt ? opt.breakdown : ex.breakdown;
+    setDraft((d) => ({
+      ...d,
+      eventName: ex.eventName ?? d.eventName,
+      contractId: ex.contractId ?? d.contractId,
+      startDate: ex.startDate ?? d.startDate,
+      endDate: ex.endDate ?? d.endDate,
+      location: ex.location ?? d.location,
+      total,
+      breakdown: { ...breakdown },
+      source: "xlsx",
+      fileName: ex.fileName,
+      sourceSheet: ex.sourceSheet ?? undefined,
+    }));
+  }
+
+  function chooseOption(id: BudgetXlsxOption["id"]) {
+    if (!lastExtraction) return;
+    const next = { ...lastExtraction, selectedOptionId: id };
+    setLastExtraction(next);
+    applyExtractionToDraft(next, id);
+    // Também propaga para o store (faz upsert atualizando o budget já importado).
+    onImported(next, id);
+  }
+
+  async function onXlsx(file: File | null) {
+    setWarn([]);
+    setLastExtraction(null);
+    if (!file) return;
+    if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
+      setWarn(["Selecione um arquivo .xlsx, .xlsm ou .xls"]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const ex = await extractBudgetFromXlsx(file);
+      setLastExtraction(ex);
+      setWarn(ex.warnings);
+      applyExtractionToDraft(ex, ex.selectedOptionId ?? undefined);
+      // Já cria/atualiza o projeto no store imediatamente, para que o usuário
+      // veja o projeto recém-importado mesmo se não clicar em "Salvar".
+      await onImported(ex, ex.selectedOptionId ?? undefined);
+    } catch (e) {
+      setWarn([
+        `Falha ao processar o Excel (${e instanceof Error ? e.message : "erro desconhecido"}).`,
+      ]);
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <GlowSection accent={S.accent} className="p-6">
+      <div>
+      <div
+        className="flex items-center justify-between mb-4 pb-4"
+        style={{ borderBottom: `1px solid rgba(6,214,245,0.1)` }}
+      >
+        <div>
+          <h2 className="text-[11px] font-black uppercase tracking-widest" style={{ color: S.accent, textShadow: `0 0 12px ${S.accent}55` }}>
+            {mode === "create" ? "Novo projeto" : "Editar orçamento do projeto"}
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: S.muted }}>
+            Importe a planilha de orçamento em Excel <em>(.xlsx)</em> ou preencha manualmente.
+            O <strong>Previsto</strong> dos KPIs vem deste valor. Cada projeto guarda seu próprio
+            orçamento e seus lançamentos (realizado).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+          style={{
+            background: S.surface,
+            color: S.dim,
+            border: `1px solid ${S.border}`,
+          }}
+        >
+          Fechar
+        </button>
+      </div>
+
+      <div className="rounded-lg p-4 mb-5" style={{ background: S.accentBg, border: `1px solid ${S.accentBorder}` }}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: S.accent, opacity: 0.7 }}>
+              Importar planilha do orçamento (Excel)
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: S.muted }}>
+              Aceita <em>.xlsx</em>, <em>.xlsm</em> ou <em>.xls</em>. O sistema identifica o
+              projeto pelo número do contrato — se já existir, sobrescreve apenas o orçamento
+              previsto e mantém os lançamentos.
+            </p>
+          </div>
+          <div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              onChange={(e) => onXlsx(e.target.files?.[0] ?? null)}
+              className="text-xs"
+              style={{ color: S.accent }}
             />
           </div>
         </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
-          {/* Form */}
-          <section className="lg:col-span-2 rounded-xl p-6" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
-            <div className="flex items-center gap-2 mb-5 pb-4" style={{ borderBottom: `1px solid ${S.borderSub}` }}>
-              <div className="w-1 h-4 rounded-full" style={{ background: S.amber }} />
-              <h2 className="text-sm font-bold" style={{ color: S.text }}>Novo lançamento</h2>
-            </div>
-            <div className="space-y-4">
-              {(["Categoria", "Valor (R$)", "Descrição", "Justificativa"] as const).map((lbl) => (
-                <div key={lbl}>
-                  <label className="block text-[10px] font-semibold uppercase tracking-widest mb-1.5" style={{ color: S.muted }}>{lbl}</label>
-                  {lbl === "Categoria" ? (
-                    <select
-                      value={category} onChange={(e) => setCategory(e.target.value)}
-                      className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
-                      style={{ background: S.inputBg, border: `1px solid ${S.border}`, color: S.text }}
-                    >
-                      {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      value={lbl === "Valor (R$)" ? amount : lbl === "Descrição" ? description : justification}
-                      onChange={(e) => lbl === "Valor (R$)" ? setAmount(e.target.value) : lbl === "Descrição" ? setDescription(e.target.value) : setJustification(e.target.value)}
-                      type={lbl === "Valor (R$)" ? "number" : "text"}
-                      placeholder={lbl === "Valor (R$)" ? "0" : `Ex: ${lbl === "Descrição" ? "Freelancer de setup" : "Aprovado pela operação"}`}
-                      className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
-                      style={{ background: S.inputBg, border: `1px solid ${S.border}`, color: S.text }}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={addEntry}
-              className="mt-5 w-full rounded-lg py-2.5 text-sm font-semibold"
-              style={{ background: S.amberBg, color: S.amberLight, border: `1px solid ${S.amberBorder}` }}
-            >
-              Adicionar custo
-            </button>
-          </section>
-
-          {/* Entries */}
-          <section className="lg:col-span-3 rounded-xl overflow-hidden" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
-            <div className="flex items-center justify-between px-6 py-4" style={{ background: S.surfaceHigh, borderBottom: `1px solid ${S.border}` }}>
-              <div className="flex items-center gap-2">
-                <div className="w-1 h-4 rounded-full" style={{ background: S.amber }} />
-                <h2 className="text-sm font-bold" style={{ color: S.text }}>Lançamentos</h2>
-              </div>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: S.amberBg, color: S.amberLight, border: `1px solid ${S.amberBorder}` }}>
-                {entries.length} {entries.length === 1 ? "item" : "itens"}
-              </span>
-            </div>
-
-            {entries.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center px-6">
-                <p className="text-sm" style={{ color: S.muted }}>Nenhum lançamento registrado.</p>
-              </div>
-            ) : (
-              <>
-                <div className="hidden sm:grid sm:grid-cols-[150px_1fr_1fr_120px_36px] gap-4 px-6 py-3" style={{ background: "#111827", borderBottom: `1px solid ${S.borderSub}` }}>
-                  {["Categoria", "Descrição", "Justificativa", "Valor", ""].map((h) => (
-                    <span key={h} className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: S.dim }}>{h}</span>
-                  ))}
-                </div>
-                {entries.map((entry, i) => {
-                  const cs = CAT_STYLE[entry.category] ?? CAT_STYLE["Outros"];
-                  return (
-                    <div
-                      key={entry.id}
-                      className="grid grid-cols-1 sm:grid-cols-[150px_1fr_1fr_120px_36px] gap-3 sm:gap-4 items-center px-6 py-4"
-                      style={{ borderBottom: i < entries.length - 1 ? `1px solid ${S.borderSub}` : "none" }}
-                    >
-                      <span className="text-[11px] font-semibold px-2 py-1 rounded-md inline-block w-fit" style={{ background: cs.bg, color: cs.color, border: `1px solid ${cs.border}` }}>
-                        {entry.category}
-                      </span>
-                      <p className="text-sm truncate" style={{ color: S.text }}>{entry.description}</p>
-                      <p className="text-sm truncate" style={{ color: S.muted }}>{entry.justification}</p>
-                      <p className="text-sm font-semibold tabular-nums" style={{ color: S.amberLight }}>
-                        R$ {entry.amount.toLocaleString("pt-BR")}
-                      </p>
+        {busy ? (
+          <p className="mt-2 text-xs" style={{ color: S.accent }}>Lendo a planilha…</p>
+        ) : null}
+        {lastExtraction ? (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs" style={{ color: S.green }}>
+              <strong>{lastExtraction.fileName}</strong>
+              {lastExtraction.total !== null
+                ? ` · total detectado: R$ ${lastExtraction.total.toLocaleString("pt-BR")}`
+                : " · total não detectado"}
+              {lastExtraction.sourceSheet ? ` · aba ${lastExtraction.sourceSheet}` : ""}
+            </p>
+            {lastExtraction.sheetNames.length > 0 ? (
+              <p className="text-[11px]" style={{ color: S.muted }}>
+                Abas lidas: {lastExtraction.sheetNames.join(", ")}
+              </p>
+            ) : null}
+            {lastExtraction.options.length > 1 ? (
+              <div className="rounded-md p-3" style={{ background: "rgba(3,10,22,0.6)", border: `1px solid ${S.border}` }}>
+                <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: S.accent, opacity: 0.7 }}>
+                  Qual coluna usar como Previsto?
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {lastExtraction.options.map((o) => {
+                    const active = o.id === lastExtraction.selectedOptionId;
+                    return (
                       <button
-                        onClick={() => removeEntry(entry.id)}
-                        className="w-8 h-8 rounded-md flex items-center justify-center transition-colors"
-                        style={{ color: S.dim }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#f87171"; (e.currentTarget as HTMLElement).style.background = "#1f0d0d"; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = S.dim; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                        key={o.id}
+                        type="button"
+                        onClick={() => chooseOption(o.id)}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+                        style={{
+                          background: active ? S.amberBg : S.accentBg,
+                          color: active ? S.amber : S.accent,
+                          border: `1px solid ${active ? S.amberBorder : S.accentBorder}`,
+                        }}
                       >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
+                        {active ? "✓ " : ""}{o.label}
                       </button>
-                    </div>
-                  );
-                })}
-              </>
-            )}
-          </section>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] mt-2" style={{ color: S.muted }}>
+                  Trocar aqui re-aplica o total e a quebra por categoria sem precisar reimportar.
+                </p>
+              </div>
+            ) : null}
+            {lastExtraction.debug.length > 0 ? (
+              <details className="text-[11px]" style={{ color: S.muted }}>
+                <summary className="cursor-pointer" style={{ color: S.accent }}>
+                  Ver mapeamento detectado ({lastExtraction.debug.length})
+                </summary>
+                <ul className="mt-1 pl-4 list-disc">
+                  {lastExtraction.debug.map((d, i) => (
+                    <li key={i}>
+                      <strong>{d.field}</strong> · {d.sheet}!{d.cell} ·{" "}
+                      <em>&ldquo;{d.matchedText}&rdquo;</em> →{" "}
+                      {typeof d.value === "number" ? `R$ ${d.value.toLocaleString("pt-BR")}` : (d.value ?? "—")}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
+        {warn.length > 0 ? (
+          <ul className="mt-2 list-disc pl-4 text-xs" style={{ color: S.amber }}>
+            {warn.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <Field label="Nome do evento *" value={draft.eventName} onChange={(v) => setField("eventName", v)} />
+        <Field label="Contrato" value={draft.contractId} onChange={(v) => setField("contractId", v)} />
+        <Field label="Local" value={draft.location} onChange={(v) => setField("location", v)} />
+        <Field label="Início (DD/MM/AAAA)" value={draft.startDate} onChange={(v) => setField("startDate", v)} />
+        <Field label="Fim (DD/MM/AAAA)" value={draft.endDate} onChange={(v) => setField("endDate", v)} />
+        <NumField label="Previsto / Budget total (R$) *" value={draft.total} onChange={(v) => setField("total", v)} />
+      </div>
+
+      <div className="mt-5">
+        <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: S.muted }}>
+          Quebra opcional por categoria (R$)
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {(Object.keys(BUDGET_CATEGORY_LABELS) as BudgetCategoryKey[]).map((k) => (
+            <NumField key={k} compact label={BUDGET_CATEGORY_LABELS[k]} value={draft.breakdown[k] ?? 0} onChange={(v) => setBreak(k, v)} />
+          ))}
         </div>
       </div>
+
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => setDraft(value)}
+          className="rounded-lg px-4 py-2 text-sm font-medium"
+          style={{ border: `1px solid ${S.border}`, color: S.dim, background: "transparent" }}
+        >
+          Reverter
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!draft.eventName.trim()) { alert("Informe o nome do evento."); return; }
+            if (!Number.isFinite(draft.total) || draft.total <= 0) { alert("Informe o Previsto / Budget total (> 0)."); return; }
+            onSave({ ...draft, total: Math.max(0, draft.total) });
+          }}
+          className="rounded-lg px-5 py-2 text-sm font-semibold"
+          style={{ background: S.amberBg, color: S.amber, border: `1px solid ${S.amberBorder}`, boxShadow: `0 0 14px rgba(255,183,0,0.15)` }}
+        >
+          Salvar projeto
+        </button>
+      </div>
+      </div>
+    </GlowSection>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label
+        className="block text-[10px] font-semibold uppercase tracking-widest mb-1.5"
+        style={{ color: S.muted }}
+      >
+        {label}
+      </label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+        style={{ background: S.inputBg, border: `1px solid ${S.border}`, color: S.text }}
+      />
+    </div>
+  );
+}
+
+function NumField({
+  label,
+  value,
+  onChange,
+  compact,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  compact?: boolean;
+}) {
+  const [text, setText] = useState<string>(value ? String(value) : "");
+  useEffect(() => {
+    setText(value ? String(value) : "");
+  }, [value]);
+  return (
+    <div>
+      <label
+        className="block text-[10px] font-semibold uppercase tracking-widest mb-1.5"
+        style={{ color: S.muted }}
+      >
+        {label}
+      </label>
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(String(e.target.value).replace(",", "."));
+          onChange(Number.isFinite(n) ? n : 0);
+        }}
+        className={`w-full rounded-lg px-3 ${compact ? "py-2" : "py-2.5"} text-sm tabular-nums outline-none`}
+        style={{ background: S.inputBg, border: `1px solid ${S.border}`, color: S.text }}
+      />
     </div>
   );
 }
