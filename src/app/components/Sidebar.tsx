@@ -4,10 +4,11 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 const ROUTE_ACCENT: Record<string, string> = {
-  '/':        '#ffb700',
-  '/costs':   '#06d6f5',
-  '/people':  '#00ff88',
-  '/backlog': '#a855f7',
+  '/':         '#ffb700',
+  '/projects': '#0ea5e9',
+  '/costs':    '#06d6f5',
+  '/people':   '#00ff88',
+  '/backlog':  '#a855f7',
 }
 
 const navGroups = [
@@ -23,6 +24,20 @@ const navGroups = [
             <rect x="14" y="3" width="7" height="7" rx="1.5" />
             <rect x="14" y="14" width="7" height="7" rx="1.5" />
             <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        ),
+      },
+      {
+        label: 'Projetos',
+        href: '/projects',
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="7" height="6" rx="1.5" />
+            <rect x="14" y="4" width="7" height="6" rx="1.5" />
+            <rect x="3" y="14" width="7" height="6" rx="1.5" />
+            <line x1="16" y1="14" x2="20" y2="14" />
+            <line x1="16" y1="17" x2="20" y2="17" />
+            <line x1="16" y1="20" x2="20" y2="20" />
           </svg>
         ),
       },

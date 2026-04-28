@@ -28,6 +28,10 @@ import {
   type BudgetXlsxExtraction,
   type BudgetXlsxOption,
 } from "@/lib/costs/xlsxImport";
+import {
+  extractFinancialClosingFromPdf,
+  type FinancialClosingExtraction,
+} from "@/lib/costs/financialClosingImport";
 
 const CATEGORIES = ["Mão de Obra", "Transporte", "Hospedagem", "Alimentação", "Frete", "Outros"];
 
@@ -115,9 +119,21 @@ function genEntryId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+const CLOSING_AUTO_JUSTIFICATION = "auto:fechamento-financeiro";
+const CLOSING_TEAM_DESC = "Fechamento financeiro · Equipe de campo (modelo Zig)";
+const CLOSING_OTHER_DESC = "Fechamento financeiro · DEMAIS DESPESAS";
+
 export default function CostsPage() {
   const [store, setStore] = useState<ProjectsStore>(EMPTY_PROJECTS_STORE);
   const [ready, setReady] = useState(false);
+  const headerImportFileRef = useRef<HTMLInputElement>(null);
+  const headerClosingFileRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [closingImportBusy, setClosingImportBusy] = useState(false);
+  /** Alimenta o editor (escolha Zig x Cliente) após importar pelo cabeçalho. */
+  const [lastImportExtraction, setLastImportExtraction] = useState<BudgetXlsxExtraction | null>(null);
+  const [lastClosingExtraction, setLastClosingExtraction] =
+    useState<FinancialClosingExtraction | null>(null);
 
   useEffect(() => {
     setStore(loadProjectsStore());
@@ -183,6 +199,129 @@ export default function CostsPage() {
     setEditingEntryId(null);
   }
 
+  function triggerHeaderImport() {
+    headerImportFileRef.current?.click();
+  }
+
+  function triggerClosingImport() {
+    if (!activeProject) {
+      alert("Selecione um projeto antes de importar o Fechamento Financeiro.");
+      return;
+    }
+    headerClosingFileRef.current?.click();
+  }
+
+  async function onHeaderImportFile(file: File | null) {
+    if (!file) return;
+    if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
+      alert("Selecione um arquivo .xlsx, .xlsm ou .xls");
+      if (headerImportFileRef.current) headerImportFileRef.current.value = "";
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const ex = await extractBudgetFromXlsx(file);
+      await handleImportedExtraction(ex, ex.selectedOptionId ?? undefined);
+    } catch (e) {
+      setLastImportExtraction(null);
+      setLastClosingExtraction(null);
+      alert(`Falha ao importar: ${e instanceof Error ? e.message : "erro desconhecido"}`);
+    } finally {
+      setImportBusy(false);
+      if (headerImportFileRef.current) headerImportFileRef.current.value = "";
+    }
+  }
+
+  function applyFinancialClosingExtraction(ex: FinancialClosingExtraction) {
+    if (!activeProject) {
+      alert("Selecione um projeto antes de importar o Fechamento Financeiro.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const imported: CostEntry[] = [];
+
+    if (ex.entries && ex.entries.length > 0) {
+      for (const e of ex.entries) {
+        if (!Number.isFinite(e.amount) || e.amount <= 0) continue;
+        imported.push({
+          id: genEntryId(),
+          category: e.category,
+          description: `Fechamento financeiro · ${e.label}`,
+          amount: Math.abs(e.amount),
+          justification: CLOSING_AUTO_JUSTIFICATION,
+          createdAt: now,
+        });
+      }
+    }
+
+    /* Fallback: se o servidor não devolveu rubricas, mantém a quebra agregada antiga. */
+    if (imported.length === 0) {
+      const teamAmt = Math.abs(ex.teamCanto ?? 0);
+      const otherAmt = Math.abs(ex.otherExpenses ?? 0);
+      if (teamAmt > 0) {
+        imported.push({
+          id: genEntryId(),
+          category: "Mão de Obra",
+          description: CLOSING_TEAM_DESC,
+          amount: teamAmt,
+          justification: CLOSING_AUTO_JUSTIFICATION,
+          createdAt: now,
+        });
+      }
+      if (otherAmt > 0) {
+        imported.push({
+          id: genEntryId(),
+          category: "Outros",
+          description: CLOSING_OTHER_DESC,
+          amount: otherAmt,
+          justification: CLOSING_AUTO_JUSTIFICATION,
+          createdAt: now,
+        });
+      }
+    }
+
+    setStore((s) => ({
+      ...s,
+      projects: s.projects.map((p) => {
+        if (p.id !== activeProject.id) return p;
+        const keep = p.entries.filter((e) => e.justification !== CLOSING_AUTO_JUSTIFICATION);
+        return { ...p, entries: [...keep, ...imported] };
+      }),
+    }));
+  }
+
+  async function onHeaderClosingFile(file: File | null) {
+    if (!file) return;
+    if (!activeProject) {
+      alert("Selecione um projeto antes de importar o Fechamento Financeiro.");
+      if (headerClosingFileRef.current) headerClosingFileRef.current.value = "";
+      return;
+    }
+    if (!/\.pdf$/i.test(file.name)) {
+      alert("Selecione um arquivo .pdf");
+      if (headerClosingFileRef.current) headerClosingFileRef.current.value = "";
+      return;
+    }
+    setClosingImportBusy(true);
+    try {
+      const ex = await extractFinancialClosingFromPdf(file);
+      setLastClosingExtraction(ex);
+      applyFinancialClosingExtraction(ex);
+      if (ex.warnings.length > 0) {
+        alert(
+          `Fechamento importado com avisos:\n- ${ex.warnings.join("\n- ")}\n\nTotal aplicado no realizado: R$ ${ex.total.toLocaleString("pt-BR")}`
+        );
+      }
+    } catch (e) {
+      alert(
+        `Falha ao importar Fechamento Financeiro: ${e instanceof Error ? e.message : "erro desconhecido"}`
+      );
+    } finally {
+      setClosingImportBusy(false);
+      if (headerClosingFileRef.current) headerClosingFileRef.current.value = "";
+    }
+  }
+
   function addEntry() {
     if (!activeProject) {
       alert("Selecione ou crie um projeto antes de adicionar um lançamento.");
@@ -231,10 +370,14 @@ export default function CostsPage() {
   function selectProject(id: string) {
     setStore((s) => setActiveProject(s, id));
     setEditingProjectId(undefined);
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     clearEntryForm();
   }
 
   function openCreate() {
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setEditingProjectId(null);
   }
 
@@ -243,11 +386,15 @@ export default function CostsPage() {
       openCreate();
       return;
     }
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setEditingProjectId(activeProject.id);
   }
 
   function closeEditor() {
     setEditingProjectId(undefined);
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
   }
 
   function handleSaveBudget(targetId: string | null, b: Budget) {
@@ -274,6 +421,8 @@ export default function CostsPage() {
         budget: finalBudget,
       })
     );
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setEditingProjectId(undefined);
   }
 
@@ -284,6 +433,8 @@ export default function CostsPage() {
     );
     if (!ok) return;
     setStore((s) => removeProject(s, activeProject.id));
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setEditingProjectId(undefined);
   }
 
@@ -294,10 +445,14 @@ export default function CostsPage() {
     );
     if (!ok) return;
     setStore((s) => closeProject(s, activeProject.id));
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setEditingProjectId(undefined);
   }
 
   function handleReopenProject(id: string) {
+    setLastImportExtraction(null);
+    setLastClosingExtraction(null);
     setStore((s) => reopenProject(s, id));
     setEditingProjectId(id);
   }
@@ -331,11 +486,14 @@ export default function CostsPage() {
     setStore((s) =>
       upsertProject(s, { id, budget: newBudget, status: "open", closedAt: undefined })
     );
+    setLastImportExtraction(ex);
     // Foca no projeto recém-importado e abre o editor para permitir ajustes finos.
     setEditingProjectId(id);
   }
 
   const editorOpen = editingProjectId !== undefined;
+  /** Tela de orçamento (KPIs + lançamentos): visível em todo o fluxo, exceto ao **criar** projeto no editor (foco no formulário). */
+  const showOrçamentoDashboard = !editorOpen || activeProject;
   const editorBudget: Budget | null = editorOpen
     ? editingProjectId === null
       ? EMPTY_BUDGET
@@ -343,9 +501,9 @@ export default function CostsPage() {
     : null;
 
   return (
-    <div className="min-h-full" style={{ background: S.bg }}>
+    <div className="min-h-screen w-full" style={{ background: S.bg, color: S.text }}>
       <div
-        className="px-8 py-5 flex items-center justify-between gap-4 flex-wrap"
+        className="px-4 sm:px-6 py-5 flex items-center justify-between gap-4 flex-wrap max-w-[1600px] mx-auto"
         style={{
           background: "rgba(3,10,22,0.95)",
           borderBottom: "1px solid rgba(6,214,245,0.1)",
@@ -381,12 +539,89 @@ export default function CostsPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <input
+            ref={headerImportFileRef}
+            type="file"
+            className="hidden"
+            accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            onChange={(e) => onHeaderImportFile(e.target.files?.[0] ?? null)}
+            aria-hidden
+          />
+          <input
+            ref={headerClosingFileRef}
+            type="file"
+            className="hidden"
+            accept=".pdf,application/pdf"
+            onChange={(e) => onHeaderClosingFile(e.target.files?.[0] ?? null)}
+            aria-hidden
+          />
           <ProjectSelector
             projects={openProjects}
             activeProjectId={activeProject?.id ?? null}
             onChange={selectProject}
             onCreate={openCreate}
           />
+          <button
+            type="button"
+            onClick={triggerHeaderImport}
+            disabled={importBusy}
+            className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg"
+            style={{
+              background: S.amberBg,
+              color: S.amber,
+              border: `1px solid ${S.amberBorder}`,
+              boxShadow: `0 0 14px rgba(255,183,0,0.12)`,
+              opacity: importBusy ? 0.65 : 1,
+              cursor: importBusy ? "wait" : "pointer",
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            {importBusy ? "Importando…" : "Importar orçamento"}
+          </button>
+          <button
+            type="button"
+            onClick={triggerClosingImport}
+            disabled={closingImportBusy || !activeProject}
+            className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg"
+            style={{
+              background: S.greenBg,
+              color: S.green,
+              border: `1px solid ${S.greenBorder}`,
+              boxShadow: `0 0 14px rgba(0,255,136,0.12)`,
+              opacity: closingImportBusy || !activeProject ? 0.65 : 1,
+              cursor: closingImportBusy || !activeProject ? "not-allowed" : "pointer",
+            }}
+            title={!activeProject ? "Selecione um projeto para importar o fechamento." : undefined}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            {closingImportBusy ? "Importando…" : "Importar fechamento"}
+          </button>
           {activeProject ? (
             <>
               <button
@@ -429,55 +664,24 @@ export default function CostsPage() {
               </button>
             </>
           ) : null}
-          <button
-            onClick={addEntry}
-            disabled={!activeProject}
-            className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg"
-            style={{
-              background: S.amberBg,
-              color: S.amber,
-              border: `1px solid ${S.amberBorder}`,
-              boxShadow: activeProject ? `0 0 14px rgba(255,183,0,0.15)` : "none",
-              opacity: activeProject ? 1 : 0.4,
-              cursor: activeProject ? "pointer" : "not-allowed",
-            }}
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Novo lançamento
-          </button>
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
-        {!ready ? null : store.projects.length === 0 && !editorOpen ? (
-          <EmptyState onCreate={openCreate} />
-        ) : null}
-
+      <div className="p-4 sm:p-6 max-w-[1600px] mx-auto space-y-6">
         {editorOpen && editorBudget ? (
           <BudgetEditor
             mode={editingProjectId === null ? "create" : "edit"}
             value={editorBudget}
+            extractionFromParent={lastImportExtraction}
             onSave={(b) => handleSaveBudget(editingProjectId ?? null, b)}
             onCancel={closeEditor}
             onImported={handleImportedExtraction}
           />
         ) : null}
 
-        {activeProject ? (
+        {showOrçamentoDashboard ? (
           <>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <GlowSection accent={S.accent}>
                 <div className="p-5">
                   <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: S.accent, opacity: 0.65 }}>
@@ -512,6 +716,11 @@ export default function CostsPage() {
                   <p className="text-[10px] mt-2" style={{ color: S.amber, opacity: 0.5 }}>
                     {entries.length} {entries.length === 1 ? "lançamento" : "lançamentos"}
                   </p>
+                  {lastClosingExtraction ? (
+                    <p className="text-[10px] mt-1" style={{ color: S.amber, opacity: 0.6 }}>
+                      Fechamento: {lastClosingExtraction.fileName}
+                    </p>
+                  ) : null}
                 </div>
               </GlowSection>
               <GlowSection accent={isOver ? S.red : S.green}>
@@ -580,8 +789,9 @@ export default function CostsPage() {
             ) : null}
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-              <GlowSection accent={S.amber} className="lg:col-span-2">
-                <div className="p-6">
+              <div className="lg:col-span-2" id="custos-novo-lancamento">
+              <GlowSection accent={S.amber} className="h-full">
+                <div className="p-6" style={{ opacity: activeProject ? 1 : 0.6 }}>
                 <div
                   className="flex items-center gap-2 mb-5 pb-4"
                   style={{ borderBottom: `1px solid rgba(255,183,0,0.1)` }}
@@ -591,6 +801,11 @@ export default function CostsPage() {
                     Novo lançamento
                   </h2>
                 </div>
+                {!activeProject ? (
+                  <p className="text-xs mb-4" style={{ color: S.muted }}>
+                    Selecione um projeto aberto ou crie com <strong>+ Novo projeto</strong> / <strong>Importar orçamento</strong>.
+                  </p>
+                ) : null}
                 <div className="space-y-4">
                   {(["Categoria", "Valor (R$)", "Descrição", "Justificativa"] as const).map((lbl) => (
                     <div key={lbl}>
@@ -604,7 +819,8 @@ export default function CostsPage() {
                         <select
                           value={category}
                           onChange={(e) => setCategory(e.target.value)}
-                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+                          disabled={!activeProject}
+                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none disabled:cursor-not-allowed"
                           style={{
                             background: S.inputBg,
                             border: `1px solid ${S.border}`,
@@ -632,6 +848,7 @@ export default function CostsPage() {
                                 : setJustification(e.target.value)
                           }
                           type={lbl === "Valor (R$)" ? "number" : "text"}
+                          disabled={!activeProject}
                           placeholder={
                             lbl === "Valor (R$)"
                               ? "0"
@@ -639,7 +856,7 @@ export default function CostsPage() {
                                   lbl === "Descrição" ? "Freelancer de setup" : "Aprovado pela operação"
                                 }`
                           }
-                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+                          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none disabled:cursor-not-allowed"
                           style={{
                             background: S.inputBg,
                             border: `1px solid ${S.border}`,
@@ -651,19 +868,23 @@ export default function CostsPage() {
                   ))}
                 </div>
                 <button
+                  type="button"
                   onClick={addEntry}
-                  className="mt-5 w-full rounded-lg py-2.5 text-sm font-semibold"
+                  disabled={!activeProject}
+                  className="mt-5 w-full rounded-lg py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
                   style={{
                     background: S.amberBg,
                     color: S.amber,
                     border: `1px solid ${S.amberBorder}`,
-                    boxShadow: `0 0 14px rgba(255,183,0,0.15)`,
+                    boxShadow: activeProject ? `0 0 14px rgba(255,183,0,0.15)` : "none",
+                    opacity: activeProject ? 1 : 0.5,
                   }}
                 >
                   {editingEntryId ? "Salvar alteração" : "Adicionar custo"}
                 </button>
                 </div>
               </GlowSection>
+              </div>
 
               <GlowSection accent={S.accent} className="lg:col-span-3 overflow-hidden">
                 <div
@@ -688,7 +909,14 @@ export default function CostsPage() {
                   </span>
                 </div>
 
-                {entries.length === 0 ? (
+                {!activeProject ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center px-6">
+                    <p className="text-sm" style={{ color: S.muted }}>
+                      Nenhum projeto ativo. Escolha um no campo <strong>Projeto</strong> no topo, ou
+                      crie com <strong>+ Novo projeto</strong> / <strong>Importar orçamento</strong>.
+                    </p>
+                  </div>
+                ) : entries.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-16 text-center px-6">
                     <p className="text-sm" style={{ color: S.muted }}>
                       Nenhum lançamento registrado neste projeto.
@@ -797,7 +1025,19 @@ function ProjectSelector({
   onCreate: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={onCreate}
+        className="text-xs font-bold px-3 py-1.5 rounded-lg"
+        style={{
+          background: S.greenBg,
+          color: S.green,
+          border: `1px solid ${S.greenBorder}`,
+        }}
+      >
+        + Novo projeto
+      </button>
       <label
         className="text-[10px] font-semibold uppercase tracking-widest"
         style={{ color: S.muted }}
@@ -829,51 +1069,7 @@ function ProjectSelector({
           ))
         )}
       </select>
-      <button
-        type="button"
-        onClick={onCreate}
-        className="text-xs font-semibold px-3 py-1.5 rounded-lg"
-        style={{
-          background: S.greenBg,
-          color: S.green,
-          border: `1px solid ${S.greenBorder}`,
-        }}
-      >
-        + Novo projeto
-      </button>
     </div>
-  );
-}
-
-function EmptyState({ onCreate }: { onCreate: () => void }) {
-  return (
-    <GlowSection accent={S.accent} className="p-10 text-center">
-      <div>
-        <p className="text-[9px] font-bold uppercase tracking-[0.22em] mb-2" style={{ color: S.amber, opacity: 0.7 }}>
-          Comece por aqui
-        </p>
-        <h2 className="text-base font-black mb-1" style={{ color: S.text }}>
-          Nenhum projeto cadastrado
-        </h2>
-        <p className="text-sm mb-5" style={{ color: S.muted }}>
-          Cada projeto tem o seu próprio orçamento (previsto) e os seus lançamentos (realizado).
-          Importe a planilha de orçamento em Excel ou crie um projeto manualmente para começar.
-        </p>
-        <button
-          type="button"
-          onClick={onCreate}
-          className="text-sm font-semibold px-5 py-2.5 rounded-lg"
-          style={{
-            background: S.amberBg,
-            color: S.amber,
-            border: `1px solid ${S.amberBorder}`,
-            boxShadow: `0 0 14px rgba(255,183,0,0.15)`,
-          }}
-        >
-          Criar / importar projeto
-        </button>
-      </div>
-    </GlowSection>
   );
 }
 
@@ -1055,25 +1251,35 @@ function BreakdownPanel({
 function BudgetEditor({
   mode,
   value,
+  extractionFromParent,
   onSave,
   onCancel,
   onImported,
 }: {
   mode: "create" | "edit";
   value: Budget;
+  extractionFromParent: BudgetXlsxExtraction | null;
   onSave: (b: Budget) => void;
   onCancel: () => void;
   onImported: (ex: BudgetXlsxExtraction, optionId?: BudgetXlsxOption["id"]) => void | Promise<void>;
 }) {
   const [draft, setDraft] = useState<Budget>(value);
-  const [busy, setBusy] = useState(false);
   const [warn, setWarn] = useState<string[]>([]);
   const [lastExtraction, setLastExtraction] = useState<BudgetXlsxExtraction | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDraft(value);
   }, [value]);
+
+  useEffect(() => {
+    if (extractionFromParent) {
+      setLastExtraction(extractionFromParent);
+      setWarn(extractionFromParent.warnings);
+    } else {
+      setLastExtraction(null);
+      setWarn([]);
+    }
+  }, [extractionFromParent]);
 
   function setField<K extends keyof Budget>(k: K, v: Budget[K]) {
     setDraft((d) => ({ ...d, [k]: v }));
@@ -1106,35 +1312,7 @@ function BudgetEditor({
     const next = { ...lastExtraction, selectedOptionId: id };
     setLastExtraction(next);
     applyExtractionToDraft(next, id);
-    // Também propaga para o store (faz upsert atualizando o budget já importado).
     onImported(next, id);
-  }
-
-  async function onXlsx(file: File | null) {
-    setWarn([]);
-    setLastExtraction(null);
-    if (!file) return;
-    if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) {
-      setWarn(["Selecione um arquivo .xlsx, .xlsm ou .xls"]);
-      return;
-    }
-    setBusy(true);
-    try {
-      const ex = await extractBudgetFromXlsx(file);
-      setLastExtraction(ex);
-      setWarn(ex.warnings);
-      applyExtractionToDraft(ex, ex.selectedOptionId ?? undefined);
-      // Já cria/atualiza o projeto no store imediatamente, para que o usuário
-      // veja o projeto recém-importado mesmo se não clicar em "Salvar".
-      await onImported(ex, ex.selectedOptionId ?? undefined);
-    } catch (e) {
-      setWarn([
-        `Falha ao processar o Excel (${e instanceof Error ? e.message : "erro desconhecido"}).`,
-      ]);
-    } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
   }
 
   return (
@@ -1149,9 +1327,10 @@ function BudgetEditor({
             {mode === "create" ? "Novo projeto" : "Editar orçamento do projeto"}
           </h2>
           <p className="text-xs mt-0.5" style={{ color: S.muted }}>
-            Importe a planilha de orçamento em Excel <em>(.xlsx)</em> ou preencha manualmente.
-            O <strong>Previsto</strong> dos KPIs vem deste valor. Cada projeto guarda seu próprio
-            orçamento e seus lançamentos (realizado).
+            Preencha manualmente os campos abaixo ou use o botão <strong>Importar orçamento</strong> no topo
+            do módulo para enviar a planilha de orçamento. O <strong>Previsto</strong> dos KPIs vem
+            deste valor. O <strong>Realizado</strong> pode ser alimentado por lançamentos manuais e também
+            por <strong>Importar fechamento</strong> (totais de Equipe de campo e Demais despesas no PDF Zig).
           </p>
         </div>
         <button
@@ -1169,31 +1348,13 @@ function BudgetEditor({
       </div>
 
       <div className="rounded-lg p-4 mb-5" style={{ background: S.accentBg, border: `1px solid ${S.accentBorder}` }}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: S.accent, opacity: 0.7 }}>
-              Importar planilha do orçamento (Excel)
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: S.muted }}>
-              Aceita <em>.xlsx</em>, <em>.xlsm</em> ou <em>.xls</em>. O sistema identifica o
-              projeto pelo número do contrato — se já existir, sobrescreve apenas o orçamento
-              previsto e mantém os lançamentos.
-            </p>
-          </div>
-          <div>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              onChange={(e) => onXlsx(e.target.files?.[0] ?? null)}
-              className="text-xs"
-              style={{ color: S.accent }}
-            />
-          </div>
-        </div>
-        {busy ? (
-          <p className="mt-2 text-xs" style={{ color: S.accent }}>Lendo a planilha…</p>
-        ) : null}
+        <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: S.accent, opacity: 0.7 }}>
+          Leitura da importação
+        </p>
+        <p className="text-xs mt-1" style={{ color: S.muted }}>
+          A importação é feita por <strong>Importar orçamento</strong> no cabeçalho (aceita .xlsx, .xlsm, .xls). Se o
+          contrato já existir, só o orçamento previsto é atualizado; os lançamentos permanecem.
+        </p>
         {lastExtraction ? (
           <div className="mt-3 space-y-2">
             <p className="text-xs" style={{ color: S.green }}>

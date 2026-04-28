@@ -79,6 +79,63 @@ const empty = (
   selectedOptionId: null,
 });
 
+/** Nome de aba no Excel: "Visão Gerencial", "1. Visão Gerencial", "VISÃO GERENCIAL 2024", etc. */
+function findVisaoGerencialSheetName(sheetNames: string[]): string | undefined {
+  for (const n of sheetNames) {
+    const h = normalizeHeader(n).replace(/\s+/g, " ");
+    if (h === "visao gerencial") return n;
+    const noPrefix = h.replace(/^[\d.()\s\-–—:]+/u, "").trim();
+    if (noPrefix === "visao gerencial" || noPrefix.startsWith("visao gerencial")) return n;
+  }
+  return undefined;
+}
+
+/** Cabeçalho: Categoria(s) + Subcategoria (com ou sem espaço no "sub"). */
+function isCategoriaSubcategoriaHeader(a: string, b: string): boolean {
+  const na = normalizeHeader(a);
+  const nb = normalizeHeader(b);
+  const catOk =
+    na === "categorias" ||
+    na === "categoria" ||
+    na.startsWith("categorias") ||
+    na.startsWith("categoria");
+  const nbc = nb.replace(/[^a-z0-9]/g, "");
+  const subOk =
+    nbc === "subcategoria" ||
+    nbc === "subcategorias" ||
+    nbc.startsWith("subcateg") ||
+    (nbc.includes("sub") && nbc.includes("categ"));
+  return catOk && subOk;
+}
+
+function visaoExtractionUnusable(vis: BudgetXlsxExtraction): boolean {
+  if (vis.options.length > 0) return false;
+  const t = vis.total;
+  if (t !== null && t > 0) return false;
+  if (Object.keys(vis.breakdown).length > 0) return false;
+  return true;
+}
+
+function mergeVisaoWithGeneric(vis: BudgetXlsxExtraction, gen: BudgetXlsxExtraction): BudgetXlsxExtraction {
+  const note =
+    "A leitura detalhada da aba Visão Gerencial não definiu o previsto; foi aplicada a varredura geral do arquivo (totais e categorias nas abas).";
+  return {
+    ...gen,
+    eventName: vis.eventName ?? gen.eventName,
+    contractId: vis.contractId ?? gen.contractId,
+    startDate: vis.startDate ?? gen.startDate,
+    endDate: vis.endDate ?? gen.endDate,
+    location: vis.location ?? gen.location,
+    sourceSheet: gen.sourceSheet ?? vis.sourceSheet,
+    fileName: vis.fileName,
+    sheetNames: vis.sheetNames,
+    debug: vis.debug.length ? [...vis.debug, ...gen.debug] : gen.debug,
+    warnings: [note, ...vis.warnings, ...gen.warnings].filter(
+      (w, i, arr) => w && arr.indexOf(w) === i
+    ),
+  };
+}
+
 export async function extractBudgetFromXlsx(file: File): Promise<BudgetXlsxExtraction> {
   if (!file) return empty("");
   const buf = await file.arrayBuffer();
@@ -98,12 +155,14 @@ export async function extractBudgetFromXlsx(file: File): Promise<BudgetXlsxExtra
     return empty(file.name, [], ["Nenhuma aba encontrada no arquivo."]);
   }
 
-  const visaoName = sheetNames.find(
-    (n) => normalizeHeader(n).replace(/\s+/g, " ") === "visao gerencial"
-  );
+  const visaoName = findVisaoGerencialSheetName(sheetNames);
   if (visaoName && wb.Sheets[visaoName]) {
     const structured = parseVisaoGerencial(wb.Sheets[visaoName], visaoName, file.name);
     structured.sheetNames = sheetNames;
+    if (visaoExtractionUnusable(structured)) {
+      const generic = parseGeneric(wb, sheetNames, file.name);
+      return mergeVisaoWithGeneric(structured, generic);
+    }
     return structured;
   }
 
@@ -180,17 +239,17 @@ function parseVisaoGerencial(
   }
 
   let headerRow = -1;
-  for (let r = 0; r < Math.min(aoa.length, 20); r++) {
+  for (let r = 0; r < Math.min(aoa.length, 40); r++) {
     const a = String(cellAt(r, 0) ?? "").trim();
     const b = String(cellAt(r, 1) ?? "").trim();
-    if (normalizeHeader(a) === "categorias" && normalizeHeader(b) === "subcategoria") {
+    if (isCategoriaSubcategoriaHeader(a, b)) {
       headerRow = r;
       break;
     }
   }
   if (headerRow < 0) {
     out.warnings.push(
-      `Aba '${sheetName}' encontrada, mas não consegui localizar o cabeçalho 'Categorias | SubCategoria'.`
+      `Aba "${sheetName}" reconhecida, mas não encontrei o bloco Categoria/Subcategoria (linha de cabeçalho). Será tentada a leitura geral do arquivo.`
     );
     return out;
   }
@@ -267,19 +326,19 @@ function parseVisaoGerencial(
   }
 
   const options: BudgetXlsxOption[] = [];
-  if (totalZig && totalZig > 0) {
+  if ((totalZig ?? 0) > 0) {
     options.push({
       id: "zig",
-      label: `Orçamento Zig · R$ ${formatBR(totalZig)}`,
-      total: totalZig,
+      label: `Orçamento Zig · R$ ${formatBR(totalZig!)}`,
+      total: totalZig!,
       breakdown: breakdownZig,
     });
   }
-  if (totalCliente && totalCliente > 0) {
+  if ((totalCliente ?? 0) > 0) {
     options.push({
       id: "cliente",
-      label: `Orçamento Cliente Aprovado · R$ ${formatBR(totalCliente)}`,
-      total: totalCliente,
+      label: `Orçamento Cliente Aprovado · R$ ${formatBR(totalCliente!)}`,
+      total: totalCliente!,
       breakdown: breakdownCliente,
     });
   }
@@ -291,7 +350,7 @@ function parseVisaoGerencial(
     out.breakdown = options[0]!.breakdown;
   } else {
     out.warnings.push(
-      "Não consegui calcular nenhum total na 'VISÃO GERENCIAL'. Verifique se as colunas 'Orçamento Cliente Aprovado' e 'Orçamento Zig' têm valores."
+      "Não calculei total na tabela da Visão Gerencial (linha TOTAL ou colunas de orçamento vazias). Tente a varredura geral do arquivo abaixo ou preencha manualmente."
     );
   }
 
