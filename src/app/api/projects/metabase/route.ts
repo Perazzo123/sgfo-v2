@@ -4,7 +4,6 @@ import {
   extractMetabaseDataset,
   fetchCardDateParameter,
   fetchMetabaseCardJson,
-  fetchMetabaseDashcardJson,
   formatMetabaseFetchError,
   mapDatasetToSGFOProjects,
   mergeDateRangeParameterIntoQueryBody,
@@ -61,42 +60,24 @@ export async function handleMetabaseRequest(request: NextRequest) {
   }
   const pFrom = parseYmdParam(request.nextUrl.searchParams.get("from"));
   const pTo = parseYmdParam(request.nextUrl.searchParams.get("to"));
-  const dashboardId = process.env.METABASE_DASHBOARD_ID?.trim();
-  const dashcardId = process.env.METABASE_DASHCARD_ID?.trim();
-  const startParamId = process.env.METABASE_DATE_START_PARAMETER_ID?.trim();
-  const endParamId = process.env.METABASE_DATE_END_PARAMETER_ID?.trim();
-  const useDashcard = !!(dashboardId && dashcardId && (startParamId || endParamId));
   let postBody: Record<string, unknown> = { ...queryBody.data };
   let autoParamId: string | null = null;
-  let usedRoute: "card" | "dashcard" = "card";
-  let res: Awaited<ReturnType<typeof fetchMetabaseCardJson>>;
-  if (pFrom && pTo && useDashcard) {
+  if (pFrom && pTo) {
     const { from, to } = orderDateRange(pFrom, pTo);
-    const value = `${from}~${to}`;
-    const paramType = process.env.METABASE_DATE_RANGE_PARAMETER_TYPE?.trim() || "date/all-options";
-    const parameters: Array<Record<string, unknown>> = [];
-    if (startParamId) parameters.push({ id: startParamId, type: paramType, value });
-    if (endParamId) parameters.push({ id: endParamId, type: paramType, value });
-    res = await fetchMetabaseDashcardJson(base, key, dashboardId!, dashcardId!, cardId, parameters);
-    usedRoute = "dashcard";
-  } else {
-    if (pFrom && pTo) {
-      const { from, to } = orderDateRange(pFrom, pTo);
-      // Tenta usar METABASE_DATE_RANGE_PARAMETER_ID; se não definido, descobre automaticamente
-      if (!process.env.METABASE_DATE_RANGE_PARAMETER_ID?.trim()) {
-        const auto = await fetchCardDateParameter(base, key, cardId);
-        if (auto) {
-          autoParamId = auto.id;
-          process.env.METABASE_DATE_RANGE_PARAMETER_ID = auto.id;
-          if (!process.env.METABASE_DATE_RANGE_PARAMETER_TYPE) {
-            process.env.METABASE_DATE_RANGE_PARAMETER_TYPE = auto.type;
-          }
+    if (!process.env.METABASE_DATE_RANGE_PARAMETER_ID?.trim()
+      && !process.env.METABASE_DATE_START_PARAMETER_ID?.trim()) {
+      const auto = await fetchCardDateParameter(base, key, cardId);
+      if (auto) {
+        autoParamId = auto.id;
+        process.env.METABASE_DATE_RANGE_PARAMETER_ID = auto.id;
+        if (!process.env.METABASE_DATE_RANGE_PARAMETER_TYPE) {
+          process.env.METABASE_DATE_RANGE_PARAMETER_TYPE = auto.type;
         }
       }
-      postBody = mergeDateRangeParameterIntoQueryBody(postBody, from, to);
     }
-    res = await fetchMetabaseCardJson(base, key, cardId, postBody);
+    postBody = mergeDateRangeParameterIntoQueryBody(postBody, from, to);
   }
+  const res = await fetchMetabaseCardJson(base, key, cardId, postBody);
   if (!res.ok) {
     return NextResponse.json(
       {
@@ -129,7 +110,7 @@ export async function handleMetabaseRequest(request: NextRequest) {
 
   const parsedDateCount = projects.filter((p) => !!p.eventDate).length;
 
-  if (pFrom && pTo && usedRoute !== "dashcard") {
+  if (pFrom && pTo) {
     const { from, to } = orderDateRange(pFrom, pTo);
     // Sem dashcard: aplicamos a mesma lógica do dashboard (Data Início ∩ Data Término no
     // intervalo) para alinhar a contagem com o que o Metabase mostra.
@@ -162,7 +143,7 @@ export async function handleMetabaseRequest(request: NextRequest) {
     count: projects.length,
     projects,
     syncedAt: now,
-    _debug: { colNames, detectedDateCol: mapped.detectedDateCol, dateColOverride: dateColOverride ?? null, autoParamId, rawCount, mappedCount, parsedDateCount, parsedSamples, dateSamples, route: usedRoute },
+    _debug: { colNames, detectedDateCol: mapped.detectedDateCol, dateColOverride: dateColOverride ?? null, autoParamId, rawCount, mappedCount, parsedDateCount, parsedSamples, dateSamples },
   });
 }
 
