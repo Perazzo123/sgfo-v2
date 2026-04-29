@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { extractPdfTextFromBuffer } from "@/lib/server/extractPdfText";
-import { parseFinancialClosingFromText } from "@/lib/costs/financialClosingParser";
+import { parseJustificativas5w2hText } from "@/lib/backlog/justificativas5w2hParser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,8 +18,8 @@ export async function POST(req: Request) {
     }
     const buf = new Uint8Array(await file.arrayBuffer());
     const text = await extractPdfTextFromBuffer(buf);
-    const extraction = parseFinancialClosingFromText(text, file.name);
-    return NextResponse.json(extraction);
+    const parsed = parseJustificativas5w2hText(text);
+    return NextResponse.json({ ...parsed, fileName: file.name });
   } catch (err) {
     const message = err instanceof Error ? `${err.name}: ${err.message}` : "erro desconhecido";
     const stack = err instanceof Error && err.stack ? err.stack.split("\n").slice(0, 4).join(" | ") : null;
