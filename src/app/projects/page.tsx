@@ -193,21 +193,21 @@ function projectToForm(p: SGFOProject): FormState {
 function Card({ title, value, sub }: { title: string; value: string | number; sub?: string }) {
   return (
     <div
-      className="relative rounded-xl p-4"
+      className="relative rounded-xl px-5 py-5"
       style={{
-        background: "rgba(4,12,26,0.8)",
+        background: "rgba(4,12,26,0.97)",
         border: `1px solid ${S.border}`,
-        boxShadow: "0 0 20px rgba(0,0,0,0.3)",
+        boxShadow: `0 0 30px rgba(14,165,233,0.06), 0 4px 60px rgba(0,0,0,0.5)`,
       }}
     >
-      <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: S.muted }}>
+      <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: S.muted, opacity: 0.65 }}>
         {title}
       </p>
-      <p className="mt-1.5 text-xl font-bold tabular-nums" style={{ color: S.text }}>
+      <p className="text-2xl font-black tabular-nums leading-none" style={{ color: S.text, textShadow: `0 0 18px ${S.accent}55, 0 0 40px ${S.accent}22` }}>
         {value}
       </p>
       {sub && (
-        <p className="text-[10px] mt-1" style={{ color: S.dim }}>
+        <p className="text-[10px] mt-2" style={{ color: S.dim }}>
           {sub}
         </p>
       )}
@@ -493,7 +493,13 @@ export default function ProjectsPage() {
 
   if (!ready) {
     return (
-      <div className="min-h-screen p-6 flex items-center justify-center" style={{ background: S.bg, color: S.muted }}>
+      <div
+        className="min-h-full flex items-center justify-center p-8"
+        style={{
+          background: "radial-gradient(ellipse at 55% 0%, #071828 0%, #030b18 55%, #020810 100%)",
+          color: S.muted,
+        }}
+      >
         Carregando…
       </div>
     );
@@ -504,23 +510,38 @@ export default function ProjectsPage() {
 
   return (
     <div
-      className="min-h-screen w-full p-4 sm:p-6"
-      style={{ background: S.bg, color: S.text }}
+      className="min-h-full"
+      style={{
+        background: "radial-gradient(ellipse at 55% 0%, #071828 0%, #030b18 55%, #020810 100%)",
+        color: S.text,
+      }}
     >
-      <div className="max-w-[1600px] mx-auto space-y-5">
+      <div
+        className="px-8 py-5 flex flex-wrap items-start justify-between gap-4"
+        style={{
+          background: "rgba(3,10,22,0.95)",
+          borderBottom: "1px solid rgba(14,165,233,0.12)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
         <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.22em] mb-1" style={{ color: "#ffb700", opacity: 0.75 }}>
+            SGFO · Módulo
+          </p>
           <h1
-            className="text-2xl font-bold tracking-tight"
-            style={{ color: S.text, textShadow: `0 0 24px ${S.accent}30` }}
+            className="text-xl font-black tracking-tight"
+            style={{ color: "#c8e8ff", textShadow: "0 0 30px rgba(14,165,233,0.25)" }}
           >
             Projetos
           </h1>
-          <p className="text-sm mt-1" style={{ color: S.muted }}>
+          <p className="text-xs mt-1 max-w-3xl" style={{ color: S.muted }}>
             A tabela mostra todos os projetos importados. O filtro de data é aplicado pelo próprio card no Metabase — o SGFO importa o que o Metabase retorna. Orçamento vem apenas do SGFO (Excel / edição manual).
           </p>
         </div>
+      </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="p-8 space-y-6">
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card
             title="Total de projetos"
             value={store.projects.length}
@@ -544,7 +565,7 @@ export default function ProjectsPage() {
         </div>
 
         <div
-          className="rounded-xl p-4 space-y-3"
+          className="rounded-xl p-6 space-y-3"
           style={{
             background: "rgba(4,12,26,0.5)",
             border: `1px solid ${S.border}`,
@@ -709,7 +730,7 @@ export default function ProjectsPage() {
         </div>
 
         <div
-          className="rounded-xl p-4"
+          className="rounded-xl p-6"
           style={{
             background: "rgba(4,12,26,0.4)",
             border: `1px solid ${S.border}`,

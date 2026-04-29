@@ -29,7 +29,7 @@ function normalizeEntries(raw: unknown): CostEntry[] {
       const o = r as Record<string, unknown>;
       const amount = Number(o.amount);
       if (!Number.isFinite(amount)) return null;
-      return {
+      const entry: CostEntry = {
         id: String(o.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
         category: String(o.category ?? "Outros"),
         description: String(o.description ?? ""),
@@ -37,6 +37,8 @@ function normalizeEntries(raw: unknown): CostEntry[] {
         justification: String(o.justification ?? ""),
         createdAt: typeof o.createdAt === "string" ? o.createdAt : new Date().toISOString(),
       };
+      if (o.outsideBudget === true) entry.outsideBudget = true;
+      return entry;
     })
     .filter((x): x is CostEntry => x !== null);
 }

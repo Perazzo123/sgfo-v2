@@ -119,6 +119,21 @@ function genEntryId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** Valor em R$ com vírgula ou ponto decimal (ex.: 1.234,56 ou 1234.56). */
+function parseAmountBr(raw: string): number {
+  const t = raw.trim().replace(/\s/g, "");
+  if (!t) return NaN;
+  const only = t.replace(/[^\d,.-]/g, "");
+  if (!only || only === "-" || only === ",") return NaN;
+  if (only.includes(",") && (!only.includes(".") || only.lastIndexOf(",") > only.lastIndexOf("."))) {
+    return Number(only.replace(/\./g, "").replace(",", "."));
+  }
+  return Number(only.replace(/,/g, ""));
+}
+
+const OUTSIDE_BUDGET_DEFAULT_JUSTIFICATION =
+  "Aprovado fora do orçamento — demanda necessária operacionalmente.";
+
 const CLOSING_AUTO_JUSTIFICATION = "auto:fechamento-financeiro";
 const CLOSING_TEAM_DESC = "Fechamento financeiro · Equipe de campo (modelo Zig)";
 const CLOSING_OTHER_DESC = "Fechamento financeiro · DEMAIS DESPESAS";
@@ -168,6 +183,7 @@ export default function CostsPage() {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [justification, setJustification] = useState("");
+  const [entryOutsideBudget, setEntryOutsideBudget] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
 
   const consumed = entries.reduce((s, e) => s + e.amount, 0);
@@ -175,6 +191,33 @@ export default function CostsPage() {
   const balance = totalBudget - consumed;
   const pct = totalBudget > 0 ? Math.min((consumed / totalBudget) * 100, 100) : 0;
   const isOver = balance < 0;
+
+  const labelToBudgetKey = useMemo(
+    () =>
+      Object.fromEntries(
+        (Object.entries(BUDGET_CATEGORY_LABELS) as [BudgetCategoryKey, string][]).map(
+          ([k, l]) => [l, k]
+        )
+      ) as Record<string, BudgetCategoryKey>,
+    []
+  );
+
+  const realizedByCategory = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const e of entries) {
+      m[e.category] = (m[e.category] ?? 0) + e.amount;
+    }
+    return m;
+  }, [entries]);
+
+  const realizedOutsideCatalog = useMemo(() => {
+    const known = new Set(CATEGORIES);
+    let sum = 0;
+    for (const [k, v] of Object.entries(realizedByCategory)) {
+      if (!known.has(k)) sum += v;
+    }
+    return sum;
+  }, [realizedByCategory]);
 
   const bolsao = useMemo(() => {
     return closedProjects.reduce(
@@ -196,6 +239,7 @@ export default function CostsPage() {
     setDescription("");
     setAmount("");
     setJustification("");
+    setEntryOutsideBudget(false);
     setEditingEntryId(null);
   }
 
@@ -327,8 +371,27 @@ export default function CostsPage() {
       alert("Selecione ou crie um projeto antes de adicionar um lançamento.");
       return;
     }
-    const n = Number(amount);
-    if (!description || !justification || !n) return;
+    const d = description.trim();
+    if (!d) {
+      alert("Preencha a descrição do custo.");
+      return;
+    }
+    let j = justification.trim();
+    if (!j && entryOutsideBudget) {
+      j = OUTSIDE_BUDGET_DEFAULT_JUSTIFICATION;
+    }
+    if (!j) {
+      alert(
+        "Preencha a justificativa (ex.: quem aprovou e por quê) ou marque “Aprovado fora do orçamento” para usar o texto padrão."
+      );
+      return;
+    }
+    const n = parseAmountBr(amount);
+    if (!Number.isFinite(n) || n <= 0) {
+      alert("Informe um valor (R$) válido e maior que zero.");
+      return;
+    }
+    const ob = entryOutsideBudget;
     setStore((s) => ({
       ...s,
       projects: s.projects.map((p) =>
@@ -336,20 +399,28 @@ export default function CostsPage() {
           ? {
               ...p,
               entries: editingEntryId
-                ? p.entries.map((e) =>
-                    e.id === editingEntryId
-                      ? { ...e, category, description, amount: n, justification }
-                      : e
-                  )
+                ? p.entries.map((e) => {
+                    if (e.id !== editingEntryId) return e;
+                    const { outsideBudget: _drop, ...rest } = e;
+                    return {
+                      ...rest,
+                      category,
+                      description: d,
+                      amount: n,
+                      justification: j,
+                      ...(ob ? { outsideBudget: true as const } : {}),
+                    };
+                  })
                 : [
                     ...p.entries,
                     {
                       id: genEntryId(),
                       category,
-                      description,
+                      description: d,
                       amount: n,
-                      justification,
+                      justification: j,
                       createdAt: new Date().toISOString(),
+                      ...(ob ? { outsideBudget: true } : {}),
                     } satisfies CostEntry,
                   ],
             }
@@ -364,6 +435,7 @@ export default function CostsPage() {
     setDescription(entry.description);
     setAmount(String(entry.amount));
     setJustification(entry.justification);
+    setEntryOutsideBudget(entry.outsideBudget === true);
     setEditingEntryId(entry.id);
   }
 
@@ -501,9 +573,15 @@ export default function CostsPage() {
     : null;
 
   return (
-    <div className="min-h-screen w-full" style={{ background: S.bg, color: S.text }}>
+    <div
+      className="min-h-full"
+      style={{
+        background: "radial-gradient(ellipse at 50% 0%, #082428 0%, #030b18 55%, #020810 100%)",
+        color: S.text,
+      }}
+    >
       <div
-        className="px-4 sm:px-6 py-5 flex items-center justify-between gap-4 flex-wrap max-w-[1600px] mx-auto"
+        className="px-8 py-5 flex flex-wrap items-start justify-between gap-4"
         style={{
           background: "rgba(3,10,22,0.95)",
           borderBottom: "1px solid rgba(6,214,245,0.1)",
@@ -515,7 +593,7 @@ export default function CostsPage() {
             className="text-[9px] font-bold uppercase tracking-[0.22em] mb-1"
             style={{ color: "#ffb700", opacity: 0.75 }}
           >
-            SGFO - MÓDULO
+            SGFO · Módulo
           </p>
           <h1
             className="text-xl font-black tracking-tight"
@@ -555,22 +633,11 @@ export default function CostsPage() {
             onChange={(e) => onHeaderClosingFile(e.target.files?.[0] ?? null)}
             aria-hidden
           />
-          <button
-            type="button"
-            onClick={openCreate}
-            className="text-xs font-bold px-3 py-1.5 rounded-lg"
-            style={{
-              background: S.greenBg,
-              color: S.green,
-              border: `1px solid ${S.greenBorder}`,
-            }}
-          >
-            + Novo projeto
-          </button>
           <ProjectSelector
             projects={openProjects}
             activeProjectId={activeProject?.id ?? null}
             onChange={selectProject}
+            onCreate={openCreate}
           />
           <button
             type="button"
@@ -678,7 +745,7 @@ export default function CostsPage() {
         </div>
       </div>
 
-      <div className="p-4 sm:p-6 max-w-[1600px] mx-auto space-y-6">
+      <div className="p-8 space-y-6">
         {editorOpen && editorBudget ? (
           <BudgetEditor
             mode={editingProjectId === null ? "create" : "edit"}
@@ -709,7 +776,7 @@ export default function CostsPage() {
                       ? budget.source === "xlsx"
                         ? `Importado · ${budget.fileName ?? "Excel"}${budget.sourceSheet ? ` · aba ${budget.sourceSheet}` : ""}`
                         : "Definido manualmente"
-                      : "Defina o orçamento para obter os indicadores"}
+                      : "Defina o orçamento para liberar os indicadores"}
                   </p>
                 </div>
               </GlowSection>
@@ -758,10 +825,7 @@ export default function CostsPage() {
               <div className="px-6 py-5">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p
-                      className="text-[9px] font-bold uppercase tracking-[0.18em] mb-0.5"
-                      style={{ color: S.accent, opacity: 0.55 }}
-                    >
+                    <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-0.5" style={{ color: S.accent, opacity: 0.55 }}>
                       Execução do Budget (realizado / previsto)
                     </p>
                     <p className="text-sm" style={{ color: S.muted }}>
@@ -807,7 +871,7 @@ export default function CostsPage() {
               <GlowSection accent={S.amber} className="h-full">
                 <div className="p-6" style={{ opacity: activeProject ? 1 : 0.6 }}>
                 <div
-                  className="flex items-center gap-2 mb-5 pb-4"
+                  className="flex items-center gap-2 mb-3 pb-4"
                   style={{ borderBottom: `1px solid rgba(255,183,0,0.1)` }}
                 >
                   <span className="block w-[2px] h-4 rounded-full" style={{ background: S.amber, boxShadow: `0 0 8px ${S.amber}` }} />
@@ -815,11 +879,21 @@ export default function CostsPage() {
                     Novo lançamento
                   </h2>
                 </div>
+                <p className="text-[11px] leading-relaxed mb-4" style={{ color: S.muted }}>
+                  No <strong style={{ color: S.text }}>cabeçalho</strong> estão{" "}
+                  <strong style={{ color: S.text }}>Importar orçamento</strong> (previsto) e{" "}
+                  <strong style={{ color: S.text }}>Importar fechamento</strong> (PDF). Abaixo, registe{" "}
+                  <strong style={{ color: S.amber }}>custos manuais</strong> pontuais — por exemplo
+                  demandas aprovadas por fora do orçamento e que precisaram ser executadas.
+                </p>
                 {!activeProject ? (
                   <p className="text-xs mb-4" style={{ color: S.muted }}>
                     Selecione um projeto aberto ou crie com <strong>+ Novo projeto</strong> / <strong>Importar orçamento</strong>.
                   </p>
                 ) : null}
+                <p className="text-[10px] font-bold uppercase tracking-widest mb-3" style={{ color: S.amber, opacity: 0.85 }}>
+                  Custo manual
+                </p>
                 <div className="space-y-4">
                   {(["Categoria", "Valor (R$)", "Descrição", "Justificativa"] as const).map((lbl) => (
                     <div key={lbl}>
@@ -861,14 +935,15 @@ export default function CostsPage() {
                                 ? setDescription(e.target.value)
                                 : setJustification(e.target.value)
                           }
-                          type={lbl === "Valor (R$)" ? "number" : "text"}
+                          type="text"
+                          inputMode={lbl === "Valor (R$)" ? "decimal" : undefined}
                           disabled={!activeProject}
                           placeholder={
                             lbl === "Valor (R$)"
-                              ? "0"
-                              : `Ex: ${
-                                  lbl === "Descrição" ? "Freelancer de setup" : "Aprovado pela operação"
-                                }`
+                              ? "Ex.: 1500 ou 1.234,56"
+                              : lbl === "Descrição"
+                                ? "Ex.: Freelancer de montagem extra"
+                                : "Ex.: Aprovado por Nome — motivo (ou use a opção abaixo)"
                           }
                           className="w-full rounded-lg px-3 py-2.5 text-sm outline-none disabled:cursor-not-allowed"
                           style={{
@@ -881,6 +956,31 @@ export default function CostsPage() {
                     </div>
                   ))}
                 </div>
+                <label
+                  className={`mt-4 flex items-start gap-3 rounded-lg px-3 py-3 border ${activeProject ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`}
+                  style={{
+                    background: entryOutsideBudget ? "rgba(255,183,0,0.08)" : "rgba(3,10,22,0.6)",
+                    borderColor: entryOutsideBudget ? "rgba(255,183,0,0.35)" : S.border,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={entryOutsideBudget}
+                    onChange={(e) => setEntryOutsideBudget(e.target.checked)}
+                    disabled={!activeProject}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-600 accent-amber-500"
+                  />
+                  <span className="text-xs leading-snug" style={{ color: S.text }}>
+                    <span className="font-bold" style={{ color: S.amber }}>
+                      Aprovado fora do orçamento
+                    </span>
+                    <span style={{ color: S.muted }}>
+                      {" "}
+                      — marca o lançamento e, se a justificativa estiver vazia, preenche o texto padrão de
+                      aprovação operacional.
+                    </span>
+                  </span>
+                </label>
                 <button
                   type="button"
                   onClick={addEntry}
@@ -894,7 +994,7 @@ export default function CostsPage() {
                     opacity: activeProject ? 1 : 0.5,
                   }}
                 >
-                  {editingEntryId ? "Salvar alteração" : "Adicionar custo"}
+                  {editingEntryId ? "Salvar alteração" : "Adicionar custo manual"}
                 </button>
                 </div>
               </GlowSection>
@@ -930,13 +1030,182 @@ export default function CostsPage() {
                       crie com <strong>+ Novo projeto</strong> / <strong>Importar orçamento</strong>.
                     </p>
                   </div>
-                ) : entries.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-center px-6">
-                    <p className="text-sm" style={{ color: S.muted }}>
-                      Nenhum lançamento registrado neste projeto.
-                    </p>
-                  </div>
                 ) : (
+                  <>
+                    <div
+                      className="px-6 py-4 space-y-3"
+                      style={{
+                        borderBottom: `1px solid rgba(6,214,245,0.1)`,
+                        background: "rgba(3,10,22,0.45)",
+                      }}
+                    >
+                      <p
+                        className="text-[9px] font-bold uppercase tracking-[0.16em]"
+                        style={{ color: S.accent, opacity: 0.75 }}
+                      >
+                        Previsto vs realizado
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div
+                          className="rounded-lg px-3 py-2.5"
+                          style={{
+                            background: "rgba(6,214,245,0.08)",
+                            border: `1px solid ${S.accentBorder}`,
+                          }}
+                        >
+                          <p
+                            className="text-[9px] font-bold uppercase tracking-widest mb-1"
+                            style={{ color: S.accent, opacity: 0.6 }}
+                          >
+                            Previsto (orçamento)
+                          </p>
+                          <p
+                            className="text-lg font-black tabular-nums leading-tight"
+                            style={{ color: S.accent, textShadow: `0 0 12px ${S.accent}44` }}
+                          >
+                            {totalBudget > 0 ? `R$ ${totalBudget.toLocaleString("pt-BR")}` : "—"}
+                          </p>
+                        </div>
+                        <div
+                          className="rounded-lg px-3 py-2.5"
+                          style={{ background: S.amberBg, border: `1px solid ${S.amberBorder}` }}
+                        >
+                          <p
+                            className="text-[9px] font-bold uppercase tracking-widest mb-1"
+                            style={{ color: S.amber, opacity: 0.65 }}
+                          >
+                            Realizado (lançamentos)
+                          </p>
+                          <p
+                            className="text-lg font-black tabular-nums leading-tight"
+                            style={{ color: S.amber, textShadow: `0 0 12px ${S.amber}44` }}
+                          >
+                            R$ {consumed.toLocaleString("pt-BR")}
+                          </p>
+                        </div>
+                        <div
+                          className="rounded-lg px-3 py-2.5"
+                          style={{
+                            background: isOver ? S.redBg : S.greenBg,
+                            border: `1px solid ${isOver ? S.redBorder : S.greenBorder}`,
+                          }}
+                        >
+                          <p
+                            className="text-[9px] font-bold uppercase tracking-widest mb-1"
+                            style={{ color: isOver ? S.red : S.green, opacity: 0.7 }}
+                          >
+                            Saldo (prev. − real.)
+                          </p>
+                          <p
+                            className="text-lg font-black tabular-nums leading-tight"
+                            style={{ color: isOver ? S.red : S.green }}
+                          >
+                            {totalBudget > 0
+                              ? `${isOver ? "− " : ""}R$ ${Math.abs(balance).toLocaleString("pt-BR")}`
+                              : "—"}
+                          </p>
+                        </div>
+                      </div>
+                      {totalBudget > 0 &&
+                        !Object.values(budget?.breakdown ?? {}).some(
+                          (n) => typeof n === "number" && n > 0
+                        ) && (
+                        <p className="text-[10px] leading-relaxed" style={{ color: S.dim }}>
+                          A quebra do orçamento por categoria ainda não foi preenchida; a tabela abaixo
+                          resume só o total. Defina a quebra no orçamento para ver previsto realizado em cada
+                          rubrica.
+                        </p>
+                      )}
+                      {(CATEGORIES.some((cat) => {
+                        const prev = budget ? (budget.breakdown[labelToBudgetKey[cat]] ?? 0) : 0;
+                        const real = realizedByCategory[cat] ?? 0;
+                        return prev > 0 || real > 0;
+                      }) ||
+                        realizedOutsideCatalog > 0) && (
+                        <div className="pt-2">
+                          <p
+                            className="text-[9px] font-bold uppercase tracking-widest mb-2"
+                            style={{ color: S.dim }}
+                          >
+                            Por categoria
+                          </p>
+                          <div className="overflow-x-auto">
+                            <div
+                              className="min-w-[320px] grid grid-cols-[1fr_88px_88px_88px] gap-2 py-1.5 border-b"
+                              style={{ borderColor: S.borderSub }}
+                            >
+                              {(["Categoria", "Prev.", "Real.", "Δ"] as const).map((h) => (
+                                <span
+                                  key={h}
+                                  className="text-[10px] font-bold uppercase tracking-widest"
+                                  style={{ color: S.dim }}
+                                >
+                                  {h}
+                                </span>
+                              ))}
+                            </div>
+                            {CATEGORIES.map((cat) => {
+                              const prevB = budget?.breakdown ?? ({} as Budget["breakdown"]);
+                              const prev = prevB[labelToBudgetKey[cat]] ?? 0;
+                              const real = realizedByCategory[cat] ?? 0;
+                              if (prev === 0 && real === 0) return null;
+                              const delta = prev - real;
+                              return (
+                                <div
+                                  key={cat}
+                                  className="min-w-[320px] grid grid-cols-[1fr_88px_88px_88px] gap-2 items-center py-1.5 border-b last:border-0 text-xs"
+                                  style={{ borderColor: S.borderSub }}
+                                >
+                                  <span className="truncate" style={{ color: S.text }}>
+                                    {cat}
+                                  </span>
+                                  <span className="text-right tabular-nums" style={{ color: S.accent }}>
+                                    R$ {prev.toLocaleString("pt-BR")}
+                                  </span>
+                                  <span
+                                    className="text-right tabular-nums"
+                                    style={{ color: S.amber }}
+                                  >
+                                    R$ {real.toLocaleString("pt-BR")}
+                                  </span>
+                                  <span
+                                    className="text-right tabular-nums font-semibold"
+                                    style={{ color: delta >= 0 ? S.green : S.red }}
+                                  >
+                                    {delta >= 0 ? "" : "− "}
+                                    R$ {Math.abs(delta).toLocaleString("pt-BR")}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {realizedOutsideCatalog > 0 ? (
+                              <div
+                                className="min-w-[320px] grid grid-cols-[1fr_88px_88px_88px] gap-2 items-center py-1.5 text-xs"
+                                style={{ color: S.muted }}
+                              >
+                                <span className="truncate italic" title="Categorias fora do mapa padrão do orçamento">
+                                  Outras rubricas (soma)
+                                </span>
+                                <span className="text-right tabular-nums">—</span>
+                                <span className="text-right tabular-nums" style={{ color: S.amber }}>
+                                  R$ {realizedOutsideCatalog.toLocaleString("pt-BR")}
+                                </span>
+                                <span className="text-right tabular-nums">—</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {entries.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-center px-6">
+                        <p className="text-sm" style={{ color: S.muted }}>
+                          Nenhum lançamento na lista. Use o formulário <strong>Novo lançamento</strong> à
+                          esquerda ou importe o <strong>fechamento</strong> no cabeçalho.
+                        </p>
+                      </div>
+                    ) : (
                   <>
                     <div
                       className="hidden sm:grid sm:grid-cols-[150px_1fr_1fr_120px_36px] gap-4 px-6 py-3"
@@ -963,16 +1232,30 @@ export default function CostsPage() {
                               i < entries.length - 1 ? `1px solid ${S.borderSub}` : "none",
                           }}
                         >
-                          <span
-                            className="text-[11px] font-semibold px-2 py-1 rounded-md inline-block w-fit"
-                            style={{
-                              background: cs.bg,
-                              color: cs.color,
-                              border: `1px solid ${cs.border}`,
-                            }}
-                          >
-                            {entry.category}
-                          </span>
+                          <div className="flex flex-col gap-1.5 min-w-0">
+                            <span
+                              className="text-[11px] font-semibold px-2 py-1 rounded-md inline-block w-fit"
+                              style={{
+                                background: cs.bg,
+                                color: cs.color,
+                                border: `1px solid ${cs.border}`,
+                              }}
+                            >
+                              {entry.category}
+                            </span>
+                            {entry.outsideBudget ? (
+                              <span
+                                className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded w-fit"
+                                style={{
+                                  background: S.amberBg,
+                                  color: S.amber,
+                                  border: `1px solid ${S.amberBorder}`,
+                                }}
+                              >
+                                Fora do previsto
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="text-sm truncate" style={{ color: S.text }}>
                             {entry.description}
                           </p>
@@ -1010,6 +1293,8 @@ export default function CostsPage() {
                       );
                     })}
                   </>
+                    )}
+                  </>
                 )}
               </GlowSection>
             </div>
@@ -1031,13 +1316,27 @@ function ProjectSelector({
   projects,
   activeProjectId,
   onChange,
+  onCreate,
 }: {
   projects: Project[];
   activeProjectId: string | null;
   onChange: (id: string) => void;
+  onCreate: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={onCreate}
+        className="text-xs font-bold px-3 py-1.5 rounded-lg"
+        style={{
+          background: S.greenBg,
+          color: S.green,
+          border: `1px solid ${S.greenBorder}`,
+        }}
+      >
+        + Novo projeto
+      </button>
       <label
         className="text-[10px] font-semibold uppercase tracking-widest"
         style={{ color: S.muted }}

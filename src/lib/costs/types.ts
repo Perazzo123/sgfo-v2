@@ -69,6 +69,8 @@ export type CostEntry = {
   justification: string;
   /** ISO de criação. */
   createdAt: string;
+  /** Custo manual aprovado além do previsto (demanda fora do orçamento). */
+  outsideBudget?: boolean;
 };
 
 /**

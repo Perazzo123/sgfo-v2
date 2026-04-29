@@ -162,9 +162,6 @@ export default function DashboardPage() {
   const [budgetTotal, setBudgetTotal]   = useState(0);
   const [consumed, setConsumed]         = useState(0);
   const [entriesCount, setEntriesCount] = useState(0);
-  /** Soma dos saldos disponíveis (previsto − realizado) de todos os projetos em Custos — exibida no KPI «Budget total» do hero. */
-  const [aggregateSaldoDisponivel, setAggregateSaldoDisponivel] = useState(0);
-  const [costProjectsCount, setCostProjectsCount] = useState(0);
   const [people, setPeople]             = useState<ReturnType<typeof loadPeopleFromStorage>>([]);
   const [backlog, setBacklog]           = useState<BacklogItem[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
@@ -176,13 +173,6 @@ export default function DashboardPage() {
     setBudgetTotal(proj?.budget.total ?? 0);
     setConsumed(pe.reduce((s, e) => s + e.amount, 0));
     setEntriesCount(pe.length);
-    const agg = store.projects.reduce((acc, p) => {
-      const prev = p.budget?.total ?? 0;
-      const cons = p.entries.reduce((s, e) => s + e.amount, 0);
-      return acc + (prev - cons);
-    }, 0);
-    setAggregateSaldoDisponivel(agg);
-    setCostProjectsCount(store.projects.length);
     setPeople(loadPeopleFromStorage());
     try {
       const bl = window.localStorage.getItem("sgfo.backlog.items.v1");
@@ -194,8 +184,6 @@ export default function DashboardPage() {
   const saldo   = budgetTotal - consumed;
   const pctExec = budgetTotal > 0 ? (consumed / budgetTotal) * 100 : 0;
   const isOver  = saldo < 0;
-  const heroBudgetTotalVal =
-    costProjectsCount > 0 ? brl(aggregateSaldoDisponivel) : "—";
 
   const active    = people.filter((p) => p.status === "Ativo");
   const headcount = active.length;
@@ -331,7 +319,7 @@ export default function DashboardPage() {
         {/* ── Hero strip ── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Budget total",    val: heroBudgetTotalVal, color: "#06d6f5" },
+            { label: "Budget total",    val: budgetTotal > 0 ? brl(budgetTotal) : "—", color: "#06d6f5" },
             { label: "Headcount ativo", val: v(headcount, "0"),                         color: "#00ff88" },
             { label: "Custo total Zig", val: totalZig > 0 ? brl(totalZig) : "—",        color: "#a855f7" },
             { label: "Ações abertas",   val: v(blOpen, "0"),                             color: "#ffb700" },
