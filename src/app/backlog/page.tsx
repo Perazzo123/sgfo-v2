@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ParsedJustificativa } from "@/lib/backlog/justificativas5w2hParser";
 
-const LS_V1 = "sgfo.backlog.items.v1";
-const LS_V2 = "sgfo.backlog.items.v2";
+import { SGFO_BACKLOG_LS_V1, SGFO_BACKLOG_LS_V2 } from "@/lib/backlog/localStorageRead";
 
 type BacklogItem = {
   id: number; title: string; responsible: string;
@@ -29,13 +28,13 @@ function clampGut(n: number) {
 function loadBacklogItems(): BacklogItem[] {
   if (typeof window === "undefined") return [];
   try {
-    const v2 = window.localStorage.getItem(LS_V2);
+    const v2 = window.localStorage.getItem(SGFO_BACKLOG_LS_V2);
     if (v2) return JSON.parse(v2) as BacklogItem[];
-    const v1 = window.localStorage.getItem(LS_V1);
+    const v1 = window.localStorage.getItem(SGFO_BACKLOG_LS_V1);
     if (v1) {
       const arr = JSON.parse(v1) as BacklogItem[];
       const migrated = arr.map((i) => ({ ...i, gutHeuristic: i.gutHeuristic ?? false }));
-      window.localStorage.setItem(LS_V2, JSON.stringify(migrated));
+      window.localStorage.setItem(SGFO_BACKLOG_LS_V2, JSON.stringify(migrated));
       return migrated;
     }
   } catch { /* no-op */ }
@@ -122,7 +121,7 @@ export default function BacklogPage() {
   const [importBanner, setImportBanner] = useState<string | null>(null);
 
   useEffect(() => {
-    try { window.localStorage.setItem(LS_V2, JSON.stringify(items)); } catch { /* no-op */ }
+    try { window.localStorage.setItem(SGFO_BACKLOG_LS_V2, JSON.stringify(items)); } catch { /* no-op */ }
   }, [items]);
 
   const [title, setTitle] = useState("");

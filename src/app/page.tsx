@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { loadProjectsStore, getActiveProject } from "@/lib/costs/storage";
+import { loadProjectsStore } from "@/lib/costs/storage";
+import { aggregateAllProjectsCostMetrics } from "@/lib/costs/aggregateAllProjects";
+import { readBacklogItemsFromLocalStorage } from "@/lib/backlog/localStorageRead";
 import { loadPeopleFromStorage } from "@/lib/people/storage";
 
 type BacklogItem = {
@@ -159,31 +161,30 @@ function SegBar({ open, wip, done, total }: { open: number; wip: number; done: n
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [ready, setReady]               = useState(false);
-  const [budgetTotal, setBudgetTotal]   = useState(0);
-  const [consumed, setConsumed]         = useState(0);
-  const [entriesCount, setEntriesCount] = useState(0);
+  /** Todos os projetos: soma de previstos e realizados. */
+  const [costPrevisto, setCostPrevisto] = useState(0);
+  const [costRealizado, setCostRealizado] = useState(0);
+  const [costEntries, setCostEntries]   = useState(0);
+  const [costProjects, setCostProjects] = useState(0);
   const [people, setPeople]             = useState<ReturnType<typeof loadPeopleFromStorage>>([]);
   const [backlog, setBacklog]           = useState<BacklogItem[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const store = loadProjectsStore();
-    const proj  = getActiveProject(store);
-    const pe    = proj?.entries ?? [];
-    setBudgetTotal(proj?.budget.total ?? 0);
-    setConsumed(pe.reduce((s, e) => s + e.amount, 0));
-    setEntriesCount(pe.length);
+    const m = aggregateAllProjectsCostMetrics(store);
+    setCostPrevisto(m.previstoTotal);
+    setCostRealizado(m.realizadoTotal);
+    setCostEntries(m.entriesCount);
+    setCostProjects(m.projectCount);
     setPeople(loadPeopleFromStorage());
-    try {
-      const bl = window.localStorage.getItem("sgfo.backlog.items.v1");
-      if (bl) setBacklog(JSON.parse(bl));
-    } catch { /* no-op */ }
+    setBacklog(readBacklogItemsFromLocalStorage<BacklogItem>());
     setReady(true);
   }, []);
 
-  const saldo   = budgetTotal - consumed;
-  const pctExec = budgetTotal > 0 ? (consumed / budgetTotal) * 100 : 0;
-  const isOver  = saldo < 0;
+  const bolsao  = costPrevisto - costRealizado;
+  const pctExec = costPrevisto > 0 ? (costRealizado / costPrevisto) * 100 : 0;
+  const isOver  = bolsao < 0;
 
   const active    = people.filter((p) => p.status === "Ativo");
   const headcount = active.length;
@@ -319,7 +320,11 @@ export default function DashboardPage() {
         {/* ── Hero strip ── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: "Budget total",    val: budgetTotal > 0 ? brl(budgetTotal) : "—", color: "#06d6f5" },
+            {
+              label: "Previsto (todos os projetos)",
+              val: costProjects === 0 && costPrevisto === 0 ? "—" : brl(costPrevisto),
+              color: "#06d6f5",
+            },
             { label: "Headcount ativo", val: v(headcount, "0"),                         color: "#00ff88" },
             { label: "Custo total Zig", val: totalZig > 0 ? brl(totalZig) : "—",        color: "#a855f7" },
             { label: "Ações abertas",   val: v(blOpen, "0"),                             color: "#ffb700" },
@@ -352,16 +357,33 @@ export default function DashboardPage() {
               <div className="flex items-center gap-5 mb-5">
                 <Ring pct={pctExec} color={isOver ? "#ff4466" : "#06d6f5"} />
                 <div>
-                  <Label color="#ffb700">Realizado</Label>
-                  <Glow value={brl(consumed)} color="#ffb700" size="2xl" />
+                  <Label color="#ffb700">Realizado (total)</Label>
+                  <Glow value={costProjects > 0 ? brl(costRealizado) : "—"} color="#ffb700" size="2xl" />
                 </div>
               </div>
 
               <div>
-                <Row label="Budget total"  value={budgetTotal > 0 ? brl(budgetTotal) : "—"} color="#06d6f5" />
-                <Row label="Saldo"         value={budgetTotal > 0 ? brl(Math.abs(saldo)) : "—"} color={isOver ? "#ff4466" : "#00ff88"} />
-                <Row label="Execução"      value={budgetTotal > 0 ? `${pctExec.toFixed(1)}%` : "—"} color="#ffb700" />
-                <Row label="Lançamentos"   value={v(entriesCount, "0")} />
+                <Row
+                  label="Projetos"
+                  value={ready ? String(costProjects) : "·"}
+                  color="#06d6f5"
+                />
+                <Row
+                  label="Previsto (total)"
+                  value={costProjects > 0 ? brl(costPrevisto) : "—"}
+                  color="#06d6f5"
+                />
+                <Row
+                  label="Bolsão (previsto − realizado)"
+                  value={costProjects > 0 ? brl(bolsao) : "—"}
+                  color={bolsao < 0 ? "#ff4466" : bolsao > 0 ? "#00ff88" : "#2a5070"}
+                />
+                <Row
+                  label="Execução"
+                  value={costPrevisto > 0 ? `${pctExec.toFixed(1)}%` : costProjects > 0 ? "0,0%" : "—"}
+                  color="#ffb700"
+                />
+                <Row label="Lançamentos"   value={v(costEntries, "0")} />
               </div>
             </div>
           </GlowCard>
