@@ -515,7 +515,7 @@ export default function CostsPage() {
             className="text-[9px] font-bold uppercase tracking-[0.22em] mb-1"
             style={{ color: "#ffb700", opacity: 0.75 }}
           >
-            SGFO · Módulo
+            SGFO - MÓDULO
           </p>
           <h1
             className="text-xl font-black tracking-tight"
@@ -555,11 +555,22 @@ export default function CostsPage() {
             onChange={(e) => onHeaderClosingFile(e.target.files?.[0] ?? null)}
             aria-hidden
           />
+          <button
+            type="button"
+            onClick={openCreate}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg"
+            style={{
+              background: S.greenBg,
+              color: S.green,
+              border: `1px solid ${S.greenBorder}`,
+            }}
+          >
+            + Novo projeto
+          </button>
           <ProjectSelector
             projects={openProjects}
             activeProjectId={activeProject?.id ?? null}
             onChange={selectProject}
-            onCreate={openCreate}
           />
           <button
             type="button"
@@ -698,7 +709,7 @@ export default function CostsPage() {
                       ? budget.source === "xlsx"
                         ? `Importado · ${budget.fileName ?? "Excel"}${budget.sourceSheet ? ` · aba ${budget.sourceSheet}` : ""}`
                         : "Definido manualmente"
-                      : "Defina o orçamento para liberar os indicadores"}
+                      : "Defina o orçamento para obter os indicadores"}
                   </p>
                 </div>
               </GlowSection>
@@ -747,7 +758,10 @@ export default function CostsPage() {
               <div className="px-6 py-5">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-0.5" style={{ color: S.accent, opacity: 0.55 }}>
+                    <p
+                      className="text-[9px] font-bold uppercase tracking-[0.18em] mb-0.5"
+                      style={{ color: S.accent, opacity: 0.55 }}
+                    >
                       Execução do Budget (realizado / previsto)
                     </p>
                     <p className="text-sm" style={{ color: S.muted }}>
@@ -1017,27 +1031,13 @@ function ProjectSelector({
   projects,
   activeProjectId,
   onChange,
-  onCreate,
 }: {
   projects: Project[];
   activeProjectId: string | null;
   onChange: (id: string) => void;
-  onCreate: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <button
-        type="button"
-        onClick={onCreate}
-        className="text-xs font-bold px-3 py-1.5 rounded-lg"
-        style={{
-          background: S.greenBg,
-          color: S.green,
-          border: `1px solid ${S.greenBorder}`,
-        }}
-      >
-        + Novo projeto
-      </button>
       <label
         className="text-[10px] font-semibold uppercase tracking-widest"
         style={{ color: S.muted }}
