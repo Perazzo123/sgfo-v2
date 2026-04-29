@@ -509,27 +509,45 @@ export function parseMetabaseQueryBodyFromEnv():
 }
 
 /**
- * Se `METABASE_DATE_RANGE_PARAMETER_ID` estiver definido, insere ou substitui o parâmetro
- * de intervalo (valor `AAAA-MM-DD~AAAA-MM-DD`) no array `parameters` do corpo do POST.
- * O `id` tem de ser o UUID do filtro "Entre" **dessa** pergunma (vê o pedido na rede do browser).
+ * Insere parâmetros de data no corpo do POST da query Metabase.
+ * Prioridade:
+ *   1. METABASE_DATE_START_PARAMETER_ID + METABASE_DATE_END_PARAMETER_ID → dois params separados
+ *   2. METABASE_DATE_RANGE_PARAMETER_ID → um param "entre" (valor "from~to")
+ *   3. Nenhum configurado → retorna base sem alterar
  */
 export function mergeDateRangeParameterIntoQueryBody(
   base: Record<string, unknown>,
   from: string,
   to: string
 ): Record<string, unknown> {
-  const paramId = process.env.METABASE_DATE_RANGE_PARAMETER_ID?.trim();
-  if (!paramId) {
-    return { ...base };
-  }
   const { from: a, to: b } = orderDateRange(from, to);
-  const value = `${a}~${b}`;
-  const type = process.env.METABASE_DATE_RANGE_PARAMETER_TYPE?.trim() || "date/range";
   const out: Record<string, unknown> = { ...base };
   const raw = out.parameters;
   const list: unknown[] = Array.isArray(raw) ? [...raw] : [];
+
+  const startId = process.env.METABASE_DATE_START_PARAMETER_ID?.trim();
+  const endId = process.env.METABASE_DATE_END_PARAMETER_ID?.trim();
+
+  if (startId || endId) {
+    const ids = [startId, endId].filter(Boolean);
+    const filtered = list.filter((item) => {
+      if (item && typeof item === "object" && "id" in item) {
+        return !ids.includes((item as { id: string }).id);
+      }
+      return true;
+    });
+    if (startId) filtered.push({ id: startId, type: "date/single", value: a });
+    if (endId) filtered.push({ id: endId, type: "date/single", value: b });
+    out.parameters = filtered;
+    return out;
+  }
+
+  const paramId = process.env.METABASE_DATE_RANGE_PARAMETER_ID?.trim();
+  if (!paramId) return { ...base };
+  const value = `${a}~${b}`;
+  const type = process.env.METABASE_DATE_RANGE_PARAMETER_TYPE?.trim() || "date/range";
   const next = list.filter((item) => {
-    if (item && typeof item === "object" && item !== null && "id" in item) {
+    if (item && typeof item === "object" && "id" in item) {
       return (item as { id: string }).id !== paramId;
     }
     return true;
