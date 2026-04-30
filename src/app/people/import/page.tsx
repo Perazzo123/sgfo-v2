@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
   parseBdWorkbook,
@@ -20,7 +19,6 @@ function brl(n: number): string {
 }
 
 export default function PeopleImportPage() {
-  const router = useRouter();
   const [ready, setReady] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -60,14 +58,15 @@ export default function PeopleImportPage() {
     setBusy(true);
     try {
       replaceWithImportedPeople(result.people);
-      router.push("/people?imported=1");
-      router.refresh();
+      // Força recarga completa para garantir que a página de Pessoas remontera
+      // e leia os dados salvos no localStorage (router.push + router.refresh
+      // simultâneos causam race condition no App Router).
+      window.location.href = "/people?imported=1";
     } catch {
-      setParseError("Não foi possível salvar. Verifique o armazenamento do navegador (modo anônimo, quota).");
-    } finally {
       setBusy(false);
+      setParseError("Não foi possível salvar. Verifique o armazenamento do navegador (modo anônimo, quota).");
     }
-  }, [result, router]);
+  }, [result]);
 
   if (!ready) {
     return (

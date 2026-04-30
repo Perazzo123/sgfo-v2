@@ -28,6 +28,7 @@ const OPTIONAL: { key: BdKey; display: string; norms: string[] }[] = [
     ],
   },
   { key: "manager", display: "Gestor", norms: ["gestor", "gerente", "lider imediato", "líder imediato"] },
+  { key: "coordinator", display: "Coordenador", norms: ["coordenador", "coordenadora", "coord", "coordenador(a)"] },
   { key: "behavior", display: "Nota Comportamento", norms: ["nota comportamento"] },
   { key: "delivery", display: "Nota Entrega", norms: ["nota entrega"] },
   { key: "classification", display: "Classificação", norms: ["classificacao", "classificação"] },
@@ -44,6 +45,7 @@ type BdKey =
   | "freelance"
   | "zigCost"
   | "manager"
+  | "coordinator"
   | "behavior"
   | "delivery"
   | "classification"
@@ -71,6 +73,7 @@ export type BdRowOutcome = {
     cargo: string;
     filial: string;
     gestor: string;
+    coordenador: string;
     salarioBase: string;
     custoZig: string;
     mediaFreelancer: string;
@@ -380,6 +383,7 @@ function readPreview(obj: Record<string, unknown>, f: FieldToOriginal): {
   cargo: string;
   filial: string;
   gestor: string;
+  coordenador: string;
   salarioBase: string;
   custoZig: string;
   mediaFreelancer: string;
@@ -395,6 +399,7 @@ function readPreview(obj: Record<string, unknown>, f: FieldToOriginal): {
     cargo: getCell(obj, f.role),
     filial: getCell(obj, f.region),
     gestor: getCell(obj, f.manager),
+    coordenador: getCell(obj, f.coordinator),
     salarioBase: getCell(obj, f.salary),
     custoZig: getCell(obj, f.zigCost),
     mediaFreelancer: getCell(obj, f.freelance),
@@ -458,6 +463,7 @@ function buildPersonFromBd(
     squad: filial,
     region: filial,
     managerName: p.gestor.replace(/\s+/g, " ").trim(),
+    coordinatorName: p.coordenador.replace(/\s+/g, " ").trim(),
     currentSalary,
     zigTotalCost,
     marketBenchmark: currentSalary,

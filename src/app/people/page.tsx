@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/lib/auth/AuthContext";
+import { filterPeopleForSession } from "@/lib/auth/filters";
 import { makePersonId, type Person, type PersonStatus } from "@/lib/people/types";
 import {
   getLastImportAt,
@@ -18,6 +20,7 @@ type FormState = {
   squad: string;
   region: string;
   managerName: string;
+  coordinatorName: string;
   currentSalary: string;
   zigTotalCost: string;
   freelanceAverage2025: string;
@@ -31,6 +34,7 @@ const emptyForm: FormState = {
   squad: "",
   region: "",
   managerName: "",
+  coordinatorName: "",
   currentSalary: "",
   zigTotalCost: "",
   freelanceAverage2025: "",
@@ -116,6 +120,7 @@ function GlowSection({
 }
 
 export default function PeoplePage() {
+  const { session } = useAuth();
   const [people, setPeople] = useState<Person[]>([]);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +134,7 @@ export default function PeoplePage() {
 
   useEffect(() => {
     if (!ready) return;
-    savePeopleToStorage(people);
+    try { savePeopleToStorage(people); } catch { /* quota / private mode */ }
   }, [people, ready]);
 
   useEffect(() => {
@@ -150,7 +155,8 @@ export default function PeoplePage() {
     setLastAt(getLastImportAt());
   }, [people, ready]);
 
-  const activePeople = useMemo(() => people.filter((p) => p.status === "Ativo"), [people]);
+  const visiblePeople = useMemo(() => filterPeopleForSession(people, session), [people, session]);
+  const activePeople = useMemo(() => visiblePeople.filter((p) => p.status === "Ativo"), [visiblePeople]);
   const headcount = activePeople.length;
   const totalZigCost = useMemo(() => activePeople.reduce((s, p) => s + p.zigTotalCost, 0), [activePeople]);
   const squadCount = useMemo(() => new Set(activePeople.map((p) => p.squad || "Sem squad")).size, [activePeople]);
@@ -160,11 +166,16 @@ export default function PeoplePage() {
     return totalSalario > 0 ? totalZigCost / totalSalario : 0;
   }, [activePeople, totalZigCost]);
 
-  const disponibilidade = people.length > 0 ? (activePeople.length / people.length) * 100 : 0;
+  const disponibilidade = visiblePeople.length > 0 ? (activePeople.length / visiblePeople.length) * 100 : 0;
 
   const spanOfControl = useMemo(() => {
     const managers = new Set(activePeople.filter((p) => p.managerName).map((p) => p.managerName));
     return managers.size > 0 ? headcount / managers.size : 0;
+  }, [activePeople, headcount]);
+
+  const spanOfControlCoord = useMemo(() => {
+    const coords = new Set(activePeople.filter((p) => p.coordinatorName).map((p) => p.coordinatorName));
+    return coords.size > 0 ? headcount / coords.size : 0;
   }, [activePeople, headcount]);
 
   const avgTicket = headcount > 0 ? totalZigCost / headcount : 0;
@@ -201,6 +212,7 @@ export default function PeoplePage() {
         name, role, squad,
         region: form.region.trim(),
         managerName: form.managerName.trim(),
+        coordinatorName: form.coordinatorName.trim(),
         currentSalary,
         zigTotalCost: Number(form.zigTotalCost) || currentSalary,
         marketBenchmark: currentSalary,
@@ -280,13 +292,14 @@ export default function PeoplePage() {
         ) : null}
 
         {/* KPI grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
-          <Kpi label="Headcount ativo"    v={String(headcount)}                                                       accent={P.accent}  />
-          <Kpi label="Custo total (Zig)"  v={formatBRL(totalZigCost)}                                                 accent={P.violet}  />
-          <Kpi label="Ticket médio"       v={avgTicket > 0 ? formatBRL(avgTicket) : "—"}                              accent={P.amber}   />
-          <Kpi label="Pessoas por gestor" v={spanOfControl > 0 ? `${spanOfControl.toFixed(1)}` : "—"} sub="média"     accent={P.cyan}    />
-          <Kpi label="Múltiplo CLT"       v={multiploEncargos > 0 ? `${multiploEncargos.toFixed(2)}×` : "—"} sub="custo / salário" accent={P.violet} />
-          <Kpi label="Disponibilidade"    v={people.length > 0 ? `${disponibilidade.toFixed(0)}%` : "—"} sub="ativos / total" accent={P.accent} />
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
+          <Kpi label="Headcount ativo"         v={String(headcount)}                                                                      accent={P.accent}  />
+          <Kpi label="Custo total (Zig)"        v={formatBRL(totalZigCost)}                                                                accent={P.violet}  />
+          <Kpi label="Ticket médio"             v={avgTicket > 0 ? formatBRL(avgTicket) : "—"}                                            accent={P.amber}   />
+          <Kpi label="Pessoas por gestor"       v={spanOfControl > 0 ? `${spanOfControl.toFixed(1)}` : "—"}       sub="média"             accent={P.cyan}    />
+          <Kpi label="Pessoas p/ coordenador"   v={spanOfControlCoord > 0 ? `${spanOfControlCoord.toFixed(1)}` : "—"} sub="média"         accent={P.cyan}    />
+          <Kpi label="Múltiplo CLT"             v={multiploEncargos > 0 ? `${multiploEncargos.toFixed(2)}×` : "—"} sub="custo / salário"  accent={P.violet}  />
+          <Kpi label="Disponibilidade"          v={visiblePeople.length > 0 ? `${disponibilidade.toFixed(0)}%` : "—"} sub="ativos / total" accent={P.accent} />
         </div>
 
         {squadCount > 0 && (
@@ -310,6 +323,7 @@ export default function PeoplePage() {
               <FormField label="Squad *" value={form.squad} onChange={(v) => setForm((f) => ({ ...f, squad: v }))} />
               <FormField label="Região" value={form.region} onChange={(v) => setForm((f) => ({ ...f, region: v }))} />
               <FormField label="Gestor" value={form.managerName} onChange={(v) => setForm((f) => ({ ...f, managerName: v }))} />
+              <FormField label="Coordenador" value={form.coordinatorName} onChange={(v) => setForm((f) => ({ ...f, coordinatorName: v }))} />
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: P.muted }}>Status</label>
                 <select
@@ -407,11 +421,11 @@ export default function PeoplePage() {
               </h2>
             </div>
             <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: P.amberBg, color: P.amber, border: `1px solid ${P.amberBorder}` }}>
-              {people.length} {people.length === 1 ? "pessoa" : "pessoas"}
+              {visiblePeople.length} {visiblePeople.length === 1 ? "pessoa" : "pessoas"}
             </span>
           </div>
 
-          {people.length === 0 ? (
+          {visiblePeople.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center px-6">
               <p className="text-sm" style={{ color: P.muted }}>
                 Nenhuma pessoa na base ainda. Importe a aba <code className="text-xs">BD</code>{" "}
@@ -426,7 +440,7 @@ export default function PeoplePage() {
               <table className="w-full min-w-[800px] text-sm border-separate border-spacing-0">
                 <thead>
                   <tr style={{ background: "rgba(3,10,22,0.8)" }}>
-                    {(["Pessoa", "Squad", "Gestor", "Salário", "Custo Zig", "M. Freel. 25", "Status", ""] as const).map((h) => (
+                    {(["Pessoa", "Squad", "Gestor", "Coordenador", "Salário", "Custo Zig", "M. Freel. 25", "Status", ""] as const).map((h) => (
                       <th
                         key={h}
                         className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-widest align-middle"
@@ -438,8 +452,8 @@ export default function PeoplePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {people.map((p, i) => (
-                    <tr key={p.id} style={{ borderBottom: i < people.length - 1 ? `1px solid ${P.borderSub}` : "none" }}>
+                  {visiblePeople.map((p, i) => (
+                    <tr key={p.id} style={{ borderBottom: i < visiblePeople.length - 1 ? `1px solid ${P.borderSub}` : "none" }}>
                       <td className="px-3 py-2.5 text-center align-middle">
                         <div className="flex flex-col items-center justify-center gap-0.5">
                           <div className="font-semibold" style={{ color: P.text }}>{p.name}</div>
@@ -455,6 +469,9 @@ export default function PeoplePage() {
                       </td>
                       <td className="px-3 py-2.5 text-center align-middle max-w-[12rem]">
                         <EditableText value={p.managerName} placeholder="— preencher —" color={P.muted} onChange={(v) => updatePerson(p.id, { managerName: v.trim() })} />
+                      </td>
+                      <td className="px-3 py-2.5 text-center align-middle max-w-[12rem]">
+                        <EditableText value={p.coordinatorName} placeholder="— preencher —" color={P.cyan} onChange={(v) => updatePerson(p.id, { coordinatorName: v.trim() })} />
                       </td>
                       <td className="px-3 py-2.5 text-center align-middle">
                         <EditableMoney value={p.currentSalary} color={P.amber} onChange={(n) => updatePerson(p.id, { currentSalary: n })} />

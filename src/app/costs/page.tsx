@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth/AuthContext";
+import { filterCostProjectsForSession } from "@/lib/auth/filters";
 import {
   BUDGET_CATEGORY_LABELS,
   EMPTY_BUDGET,
@@ -139,6 +141,7 @@ const CLOSING_TEAM_DESC = "Fechamento financeiro · Equipe de campo (modelo Zig)
 const CLOSING_OTHER_DESC = "Fechamento financeiro · DEMAIS DESPESAS";
 
 export default function CostsPage() {
+  const { session } = useAuth();
   const [store, setStore] = useState<ProjectsStore>(EMPTY_PROJECTS_STORE);
   const [ready, setReady] = useState(false);
   const headerImportFileRef = useRef<HTMLInputElement>(null);
@@ -169,6 +172,28 @@ export default function CostsPage() {
     () => store.projects.filter((p) => p.status === "closed"),
     [store.projects]
   );
+  const openVisible = useMemo(
+    () => filterCostProjectsForSession(openProjects, session),
+    [openProjects, session]
+  );
+  const closedVisible = useMemo(
+    () => filterCostProjectsForSession(closedProjects, session),
+    [closedProjects, session]
+  );
+
+  useEffect(() => {
+    if (!ready) return;
+    const openV = filterCostProjectsForSession(
+      store.projects.filter((p) => p.status === "open"),
+      session
+    );
+    const cur = getActiveProject(store);
+    if (cur && openV.some((p) => p.id === cur.id)) return;
+    const nextId = openV[0]?.id ?? null;
+    if (nextId === store.activeProjectId) return;
+    setStore((s) => setActiveProject(s, nextId));
+  }, [ready, store.projects, store.activeProjectId, session]);
+
   const budget = activeProject?.budget ?? null;
   const entries = activeProject?.entries ?? [];
 
@@ -220,7 +245,7 @@ export default function CostsPage() {
   }, [realizedByCategory]);
 
   const bolsao = useMemo(() => {
-    return closedProjects.reduce(
+    return closedVisible.reduce(
       (acc, p) => {
         const previsto = p.budget.total ?? 0;
         const realizado = projectRealized(p);
@@ -232,7 +257,7 @@ export default function CostsPage() {
       },
       { sobras: 0, estouros: 0, liquido: 0 }
     );
-  }, [closedProjects]);
+  }, [closedVisible]);
 
   function clearEntryForm() {
     setCategory("Mão de Obra");
@@ -470,7 +495,15 @@ export default function CostsPage() {
   }
 
   function handleSaveBudget(targetId: string | null, b: Budget) {
-    const finalBudget: Budget = { ...b, updatedAt: new Date().toISOString() };
+    const areaZig =
+      typeof b.totalZigArea === "number" && Number.isFinite(b.totalZigArea) && b.totalZigArea >= 0
+        ? b.totalZigArea
+        : Math.max(0, b.total ?? 0);
+    const finalBudget: Budget = {
+      ...b,
+      updatedAt: new Date().toISOString(),
+      totalZigArea: areaZig,
+    };
     let projectId: string;
     if (targetId === null) {
       projectId = makeProjectId({
@@ -537,6 +570,8 @@ export default function CostsPage() {
     const opt = optionId ? ex.options.find((o) => o.id === optionId) ?? null : null;
     const total = opt ? opt.total : ex.total ?? 0;
     const breakdown = opt ? opt.breakdown : ex.breakdown;
+    const zigOpt = ex.options.find((o) => o.id === "zig");
+    const cliOpt = ex.options.find((o) => o.id === "cliente");
     const newBudget: Budget = {
       ...EMPTY_BUDGET,
       eventName: ex.eventName ?? "",
@@ -550,6 +585,8 @@ export default function CostsPage() {
       fileName: ex.fileName,
       sourceSheet: ex.sourceSheet ?? undefined,
       updatedAt: new Date().toISOString(),
+      totalZigArea: zigOpt ? zigOpt.total : total,
+      ...(cliOpt ? { totalClienteAprovado: cliOpt.total } : {}),
     };
     const id = makeProjectId({
       contractId: newBudget.contractId,
@@ -634,7 +671,7 @@ export default function CostsPage() {
             aria-hidden
           />
           <ProjectSelector
-            projects={openProjects}
+            projects={openVisible}
             activeProjectId={activeProject?.id ?? null}
             onChange={selectProject}
             onCreate={openCreate}
@@ -1301,10 +1338,10 @@ export default function CostsPage() {
           </>
         ) : null}
 
-        {closedProjects.length > 0 ? (
+        {closedVisible.length > 0 ? (
           <>
             <BolsaoPanel sobras={bolsao.sobras} estouros={bolsao.estouros} liquido={bolsao.liquido} />
-            <ClosedBudgetsTable projects={closedProjects} onReopen={handleReopenProject} />
+            <ClosedBudgetsTable projects={closedVisible} onReopen={handleReopenProject} />
           </>
         ) : null}
       </div>
@@ -1756,7 +1793,7 @@ function BudgetEditor({
           type="button"
           onClick={() => {
             if (!draft.eventName.trim()) { alert("Informe o nome do evento."); return; }
-            if (!Number.isFinite(draft.total) || draft.total <= 0) { alert("Informe o Previsto / Budget total (> 0)."); return; }
+            if (!Number.isFinite(draft.total) || draft.total < 0) { alert("Informe um Previsto / Budget total válido (>= 0)."); return; }
             onSave({ ...draft, total: Math.max(0, draft.total) });
           }}
           className="rounded-lg px-5 py-2 text-sm font-semibold"
@@ -1808,9 +1845,9 @@ function NumField({
   onChange: (v: number) => void;
   compact?: boolean;
 }) {
-  const [text, setText] = useState<string>(value ? String(value) : "");
+  const [text, setText] = useState<string>(String(value ?? 0));
   useEffect(() => {
-    setText(value ? String(value) : "");
+    setText(String(value ?? 0));
   }, [value]);
   return (
     <div>

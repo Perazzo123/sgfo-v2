@@ -12,6 +12,7 @@ export type Person = {
   squad: string;
   region: string;
   managerName: string;
+  coordinatorName: string;
   currentSalary: number;
   zigTotalCost: number;
   marketBenchmark: number;

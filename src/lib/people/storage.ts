@@ -55,11 +55,7 @@ export function loadPeopleFromStorage(): Person[] {
 
 export function savePeopleToStorage(people: Person[]): void {
   if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
-  } catch {
-    /* no-op */
-  }
+  window.localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
 }
 
 /**
@@ -94,6 +90,7 @@ function migrateFromSaved(row: unknown): Person | null {
     squad: String(o.squad ?? "—"),
     region: String(o.region ?? ""),
     managerName: String(o.managerName ?? ""),
+    coordinatorName: String(o.coordinatorName ?? ""),
     currentSalary: toNum(o.currentSalary) ?? 0,
     zigTotalCost: toNum(o.zigTotalCost) ?? toNum(o.currentSalary) ?? 0,
     marketBenchmark: toNum(o.marketBenchmark) ?? toNum(o.currentSalary) ?? 0,
